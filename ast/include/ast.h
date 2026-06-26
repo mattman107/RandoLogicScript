@@ -414,6 +414,7 @@ enum class Type {
 	// TODO: Implement parameterized callable syntax (e.g., (Item) -> Bool).
 	Callable,   // generic callable value
 	Condition,  // callable with signature () -> Bool
+	Enum,       // user-defined or host-defined enum value
     Item,       // RG_*
     Enemy,      // RE_*
     Distance,   // ED_*
@@ -431,6 +432,50 @@ enum class Type {
     Error,      // poison type — inference failed, suppress cascading errors
 };
 
+enum class EnumKind {
+	Normal,
+	Extern,
+};
+
+struct EnumMemberInfo {
+	Name name;
+	std::optional<int> value;
+	Span span;
+};
+
+struct EnumPatternInfo {
+	std::string pattern;
+	Span span;
+};
+
+using EnumEntryInfo = std::variant<EnumMemberInfo, EnumPatternInfo>;
+
+inline bool isEnumMemberEntry(const EnumEntryInfo& entry) {
+	return std::holds_alternative<EnumMemberInfo>(entry);
+}
+
+inline bool isEnumPatternEntry(const EnumEntryInfo& entry) {
+	return std::holds_alternative<EnumPatternInfo>(entry);
+}
+
+struct EnumInfo {
+	Name name;
+	EnumKind kind = EnumKind::Normal;
+	Type underlyingType = Type::Int;
+	std::vector<EnumEntryInfo> entries;
+	Span span;
+
+	EnumInfo() = default;
+
+	EnumInfo(Name name, EnumKind kind, Type underlyingType,
+	         std::vector<EnumEntryInfo> entries, Span span = {})
+		: name(std::move(name)),
+		  kind(kind),
+		  underlyingType(underlyingType),
+		  entries(std::move(entries)),
+		  span(std::move(span)) {}
+};
+
 /// Aggregated AST for all `.rls` files in a project.
 /// All top-level declarations are globally visible (no import mechanism).
 struct Project {
@@ -440,6 +485,7 @@ struct Project {
 	std::map<std::string, std::vector<const ExtendRegionDecl*>> ExtendRegionDecls;
 	std::map<std::string, const DefineDecl*> DefineDecls;
 	std::map<std::string, const ExternDefineDecl*> ExternDefineDecls;
+	std::map<std::string, EnumInfo> EnumInfos;
 
 	template <typename T>
 	void setType(const T* node, Type type) {
@@ -450,6 +496,29 @@ struct Project {
 	std::optional<Type> getType(const T* node) const {
 		auto it = TypeTable.find(node);
 		return it != TypeTable.end() ? std::optional(it->second) : std::nullopt;
+	}
+
+	template <typename T>
+	void setEnumType(const T* node, std::string enumName) {
+		EnumTypeTable[node] = std::move(enumName);
+	}
+
+	template <typename T>
+	std::optional<std::string_view> getEnumType(const T* node) const {
+		auto it = EnumTypeTable.find(node);
+		if (it == EnumTypeTable.end()) {
+			return std::nullopt;
+		}
+		return it->second;
+	}
+
+	void registerEnum(EnumInfo info) {
+		EnumInfos[info.name.text] = std::move(info);
+	}
+
+	const EnumInfo* getEnumInfo(std::string_view enumName) const {
+		auto it = EnumInfos.find(std::string(enumName));
+		return it != EnumInfos.end() ? &it->second : nullptr;
 	}
 
 	void setResolvedCallArgs(const CallExpr* node, std::vector<const Expr*> args) {
@@ -463,6 +532,7 @@ struct Project {
 
 private:
 	std::unordered_map<const void*, Type> TypeTable;
+	std::unordered_map<const void*, std::string> EnumTypeTable;
 	std::unordered_map<const CallExpr*, std::vector<const Expr*>> ResolvedCallArgs;
 };
 

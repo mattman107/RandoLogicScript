@@ -44,6 +44,27 @@ std::optional<ast::Type> typeFromIdentifier(std::string_view name) {
 	return std::nullopt;
 }
 
+static bool isBuiltinEnumType(ast::Type type) {
+	switch (type) {
+	case ast::Type::Item:
+	case ast::Type::Enemy:
+	case ast::Type::Distance:
+	case ast::Type::Trick:
+	case ast::Type::Setting:
+	case ast::Type::Region:
+	case ast::Type::Check:
+	case ast::Type::Logic:
+	case ast::Type::Scene:
+	case ast::Type::Dungeon:
+	case ast::Type::Area:
+	case ast::Type::Trial:
+	case ast::Type::WaterLevel:
+		return true;
+	default:
+		return false;
+	}
+}
+
 // == Step 4: Scope for parameters ============================================
 
 /// Maps parameter names to their types. nullopt = not yet inferred.
@@ -186,6 +207,9 @@ struct ExprResolver {
 
 		if (auto t = typeFromIdentifier(node.name.text)) {
 			node.kind = ast::IdentifierKind::EnumValue;
+			if (isBuiltinEnumType(*t)) {
+				project.setEnumType(&expr, std::string(typeName(*t)));
+			}
 			return *t;
 		}
 		diags.push_back({

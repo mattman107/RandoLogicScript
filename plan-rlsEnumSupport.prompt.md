@@ -2,6 +2,68 @@
 
 Add first-class enum declarations to RLS with two forms: enum (project-owned) and extern enum (host-owned), support extern glob expansion from host registry, allow implicit enum/int conversion both ways, and enforce hard ambiguity errors requiring EnumName.ValueName syntax. Keep existing full constants usable by default, only requiring dot syntax when multiple enums expose the same value.
 
+**Execution Checklist**
+
+**Phase 1 - Type System Foundation**
+- [x] Add enum-aware semantic typing foundation in [ast/include/ast.h](ast/include/ast.h).
+- [x] Add Type::Enum.
+- [x] Add enum identity side-table in Project (setEnumType/getEnumType).
+- [x] Add enum metadata registry in Project (registerEnum/getEnumInfo).
+- [x] Support unknown values for value-dependent warnings (`EnumMemberInfo.value: optional<int>`).
+- [x] Implement option 1 model split: explicit enum members vs pattern declarations (`EnumEntryInfo = variant<EnumMemberInfo, EnumPatternInfo>`).
+- [x] Wire Enum through sema helper utilities in [sema/src/type_helpers.h](sema/src/type_helpers.h).
+- [x] Add non-breaking enum identity scaffolding in [sema/src/resolve_types.cpp](sema/src/resolve_types.cpp) for builtin enum identifiers.
+- [ ] Add compatibility touchups in transpiler type routing for Type::Enum.
+- [x] Add/adjust AST and sema tests for completed Phase 1 slices.
+
+**Phase 2 - Grammar, AST, And Parsing**
+- [ ] Add top-level declarations enum and extern enum to grammar declaration alternatives, reserved keywords, parse-tree selector, and builder dispatch.
+- [ ] Add member-access expression syntax for EnumName.ValueName and AST node MemberExpr (or EnumValueRef equivalent) to represent dotted disambiguation explicitly.
+- [ ] Add enum member syntax supporting optional explicit integer assignment, with auto-increment for omitted values.
+- [ ] Add extern enum member entries supporting explicit names and glob pattern entries.
+- [ ] Add parser diagnostics for new keyword expectations and malformed enum declarations.
+
+**Phase 3 - Declaration Collection And Validation**
+- [ ] Extend collectDeclarations to gather EnumDecl and ExternEnumDecl into global lookup maps and detect duplicate enum names.
+- [ ] Validate enum member rules.
+- [ ] Normal enum: no wildcard members allowed; duplicate member names forbidden; computed integer values unique.
+- [ ] Extern enum: explicit members and glob patterns allowed; at least one member source (explicit or wildcard) required.
+- [ ] Expand extern glob patterns against host enum registry (randomizer enum metadata), then materialize concrete members and detect overlaps/duplicates after expansion.
+- [ ] Validate collisions between enum value names across enums are permitted but marked as potentially ambiguous for use-site resolution.
+
+**Phase 4 - Identifier And Expression Type Resolution**
+- [ ] Replace prefix-only typeFromIdentifier behavior with two-stage lookup.
+- [ ] Stage A: exact enum value match across collected enum registries (builtin + normal + extern expanded).
+- [ ] Stage B: fallback prefix map for legacy/builtin values if not otherwise resolved.
+- [ ] On bare identifier with multiple enum matches, emit hard error requiring EnumName.ValueName.
+- [ ] Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
+- [ ] Add implicit conversion rules requested.
+- [ ] enum to int allowed in arithmetic/comparison/call binding.
+- [ ] int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
+- [ ] Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
+- [ ] Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
+
+**Phase 5 - Transpiler Integration**
+- [ ] Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
+- [ ] Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
+- [ ] Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
+- [ ] Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
+
+**Phase 6 - Tests And Documentation**
+- [ ] Parser tests: enum and extern enum declarations, optional explicit values, glob entries, dotted member expressions, malformed cases.
+- [ ] Sema tests: duplicate enum declarations, member value assignment auto-increment, wildcard expansion, ambiguity diagnostics, enum/int implicit conversions, dot disambiguation success paths.
+- [ ] AST tests: new declaration variants, enum identity table storage/retrieval, member expression node construction.
+- [ ] Transpiler tests: generated C++ for bare and dotted enum values, enum params, conversion-heavy expressions.
+- [ ] Docs updates: language spec sections on core types, type inference, enum declarations, extern wildcards, ambiguity rules, and conversion semantics.
+
+**Phase 7 - Verification And Rollout**
+- [ ] Run parser, sema, ast, and soh transpiler test suites.
+- [ ] Add golden examples showing both non-ambiguous bare constants and ambiguity requiring EnumName.ValueName.
+- [ ] Validate existing scripts still compile unchanged unless an intentional ambiguity is introduced by new enums.
+
+**History (condensed)**
+- 2026-06-25: Completed Phase 1 slices 1-5 (AST enum foundation, optional values, option 1 entry split, sema helper wiring, builtin enum identity scaffolding).
+
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
 A. Introduce enum-aware semantic typing without breaking existing primitive/builtin flow in ast::Type.

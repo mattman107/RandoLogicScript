@@ -19,6 +19,7 @@ inline std::string_view typeName(ast::Type t) {
 	case ast::Type::Int:        return "Int";
 	case ast::Type::Callable:   return "Callable";
 	case ast::Type::Condition:  return "Condition";
+	case ast::Type::Enum:       return "Enum";
 	case ast::Type::Item:       return "Item";
 	case ast::Type::Enemy:      return "Enemy";
 	case ast::Type::Distance:   return "Distance";
@@ -59,6 +60,7 @@ inline std::optional<ast::Type> typeFromAnnotation(std::string_view annotation) 
 		{"Int",        ast::Type::Int},
 		{"Callable",   ast::Type::Callable},
 		{"Condition",  ast::Type::Condition},
+		{"Enum",       ast::Type::Enum},
 		{"Item",       ast::Type::Item},
 		{"Enemy",      ast::Type::Enemy},
 		{"Distance",   ast::Type::Distance},

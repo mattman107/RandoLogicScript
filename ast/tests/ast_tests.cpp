@@ -602,3 +602,107 @@ TEST(TypeTableTests, PointerStabilityAfterProjectFilesGrow) {
 	EXPECT_EQ(project.getType(paramPtr).value(), Type::Distance);
 	EXPECT_EQ(project.getType(bodyPtr).value(), Type::Distance);
 }
+
+// == Enum type side table ====================================================
+
+TEST(EnumTypeTableTests, EmptyByDefault) {
+	Project project;
+	auto expr = makeExpr(Identifier{Name("RG_HOOKSHOT")});
+	EXPECT_FALSE(project.getEnumType(expr.get()).has_value());
+}
+
+TEST(EnumTypeTableTests, SetAndGetExprEnumType) {
+	Project project;
+	auto expr = makeExpr(Identifier{Name("RG_HOOKSHOT")});
+	project.setType(expr.get(), Type::Enum);
+	project.setEnumType(expr.get(), "Item");
+
+	auto enumType = project.getEnumType(expr.get());
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Item");
+}
+
+TEST(EnumTypeTableTests, SetAndGetParamEnumType) {
+	Project project;
+	Param param(Name("x"), std::nullopt, nullptr);
+	project.setType(&param, Type::Enum);
+	project.setEnumType(&param, "Distance");
+
+	auto enumType = project.getEnumType(&param);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Distance");
+}
+
+TEST(EnumTypeTableTests, OverwriteEnumType) {
+	Project project;
+	auto expr = makeExpr(Identifier{Name("x")});
+	project.setEnumType(expr.get(), "Item");
+	project.setEnumType(expr.get(), "CustomItem");
+
+	auto enumType = project.getEnumType(expr.get());
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "CustomItem");
+}
+
+// == Enum metadata registry ==================================================
+
+TEST(EnumRegistryTests, RegisterAndLookupEnum) {
+	Project project;
+	EnumInfo info(
+		Name("CustomEnum"),
+		EnumKind::Normal,
+		Type::Int,
+		{
+			EnumMemberInfo{Name("A"), 0, {}},
+			EnumMemberInfo{Name("B"), 1, {}},
+		}
+	);
+
+	project.registerEnum(std::move(info));
+
+	const auto* resolved = project.getEnumInfo("CustomEnum");
+	ASSERT_NE(resolved, nullptr);
+	EXPECT_EQ(resolved->kind, EnumKind::Normal);
+	EXPECT_EQ(resolved->underlyingType, Type::Int);
+	ASSERT_EQ(resolved->entries.size(), 2u);
+	ASSERT_TRUE(isEnumMemberEntry(resolved->entries[0]));
+	ASSERT_TRUE(isEnumMemberEntry(resolved->entries[1]));
+
+	const auto& memberA = std::get<EnumMemberInfo>(resolved->entries[0]);
+	const auto& memberB = std::get<EnumMemberInfo>(resolved->entries[1]);
+
+	EXPECT_EQ(memberA.name, "A");
+	ASSERT_TRUE(memberA.value.has_value());
+	EXPECT_EQ(*memberA.value, 0);
+	EXPECT_EQ(memberB.name, "B");
+	ASSERT_TRUE(memberB.value.has_value());
+	EXPECT_EQ(*memberB.value, 1);
+}
+
+TEST(EnumRegistryTests, RegisterExternEnumMemberFromPattern) {
+	Project project;
+	EnumInfo info(
+		Name("Item"),
+		EnumKind::Extern,
+		Type::Int,
+		{
+			EnumPatternInfo{"RG_*", {}},
+		}
+	);
+
+	project.registerEnum(std::move(info));
+
+	const auto* resolved = project.getEnumInfo("Item");
+	ASSERT_NE(resolved, nullptr);
+	EXPECT_EQ(resolved->kind, EnumKind::Extern);
+	ASSERT_EQ(resolved->entries.size(), 1u);
+	ASSERT_TRUE(isEnumPatternEntry(resolved->entries[0]));
+
+	const auto& pattern = std::get<EnumPatternInfo>(resolved->entries[0]);
+	EXPECT_EQ(pattern.pattern, "RG_*");
+}
+
+TEST(EnumRegistryTests, MissingEnumReturnsNull) {
+	Project project;
+	EXPECT_EQ(project.getEnumInfo("DoesNotExist"), nullptr);
+}

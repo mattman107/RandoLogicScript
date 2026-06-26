@@ -129,6 +129,9 @@ TEST(ResolveTypes, IdentifierEnum) {
 	ASSERT_NE(expr, nullptr);
 	ASSERT_TRUE(std::holds_alternative<Identifier>(expr->node));
 	EXPECT_EQ(project.getType(expr), Type::Item);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Item");
 	EXPECT_EQ(std::get<Identifier>(expr->node).kind, IdentifierKind::EnumValue);
 }
 
@@ -1339,6 +1342,7 @@ TEST(TypeAnnotation, AllTypes) {
 	EXPECT_EQ(typeFromAnnotation("Int"),        Type::Int);
 	EXPECT_EQ(typeFromAnnotation("Callable"),   Type::Callable);
 	EXPECT_EQ(typeFromAnnotation("Condition"),  Type::Condition);
+	EXPECT_EQ(typeFromAnnotation("Enum"),       Type::Enum);
 	EXPECT_EQ(typeFromAnnotation("Item"),       Type::Item);
 	EXPECT_EQ(typeFromAnnotation("Enemy"),      Type::Enemy);
 	EXPECT_EQ(typeFromAnnotation("Distance"),   Type::Distance);
