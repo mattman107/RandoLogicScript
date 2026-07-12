@@ -39,7 +39,7 @@ std::string ApTranspiler::TryGenerateOptionFilter(const rls::ast::BinaryExpr& no
 	return renderSettingOptionFilter(node, /*negate=*/false);
 }
 
-std::string ApTranspiler::renderSettingOptionFilter(const rls::ast::BinaryExpr& node, bool negate) const {
+std::string ApTranspiler::optionFilterArgs(const rls::ast::BinaryExpr& node, bool negate) const {
 	auto* rightId = std::get_if<rls::ast::Identifier>(&node.right->node);
 	auto* leftCall = std::get_if<rls::ast::CallExpr>(&node.left->node);
 	auto* settingKeyId = std::get_if<rls::ast::Identifier>(&project.getResolvedCallArgs(leftCall)->front()->node);
@@ -54,8 +54,15 @@ std::string ApTranspiler::renderSettingOptionFilter(const rls::ast::BinaryExpr& 
 	if (ne) {
 		args << ", \"ne\"";
 	}
+	return args.str();
+}
 
-	return WrapOptionFilter(args.str());
+std::string ApTranspiler::renderSettingOptionFilter(const rls::ast::BinaryExpr& node, bool negate) const {
+	return WrapOptionFilter(optionFilterArgs(node, negate));
+}
+
+std::string ApTranspiler::renderSettingCheck(const rls::ast::BinaryExpr& node) const {
+	return "OptionFilter(" + optionFilterArgs(node, /*negate=*/false) + ").check(" + ruleContextOptions() + ")";
 }
 
 // Render the negation of a pure option-filter rule. Precondition: IsPureOptionFilterRule(expr).
@@ -374,7 +381,65 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::BinaryExpr& node) c
 	}
 }
 
+bool ApTranspiler::isBuildTimeSettingCondition(const rls::ast::ExprPtr& cond) const {
+	// A pure option-filter expression is build-time only if we have somewhere to read the
+	// options from; without an accessor, .check() cannot be emitted.
+	return !ruleContextOptions().empty() && IsPureOptionFilterRule(cond);
+}
+
+std::string ApTranspiler::GenerateBuildTimeSettingCondition(const rls::ast::ExprPtr& expr) const {
+	const auto& node = expr->node;
+
+	// true/false/always/never -> plain Python bools.
+	if (auto* lit = std::get_if<rls::ast::BoolLiteral>(&node)) {
+		return lit->value ? "True" : "False";
+	}
+	// The only unary over a pure rule is `not`. Parenthesize to stay above `and`/`or`.
+	if (auto* unary = std::get_if<rls::ast::UnaryExpr>(&node)) {
+		return "not (" + GenerateBuildTimeSettingCondition(unary->operand) + ")";
+	}
+	if (auto* binary = std::get_if<rls::ast::BinaryExpr>(&node)) {
+		if (IsSettingComparison(*binary)) {
+			return renderSettingCheck(*binary);
+		}
+		// and/or of pure settings -> Python and/or. Parenthesize compound operands (safe, and
+		// keeps mixed and/or nests unambiguous).
+		if (binary->op == rls::ast::BinaryOp::And) {
+			return "(" + GenerateBuildTimeSettingCondition(binary->left) + ") and (" +
+				   GenerateBuildTimeSettingCondition(binary->right) + ")";
+		}
+		if (binary->op == rls::ast::BinaryOp::Or) {
+			return "(" + GenerateBuildTimeSettingCondition(binary->left) + ") or (" +
+				   GenerateBuildTimeSettingCondition(binary->right) + ")";
+		}
+	}
+	if (auto* call = std::get_if<rls::ast::CallExpr>(&node)) {
+		// Bare setting(K) truthiness guard: OptionFilter(K, True).check(...).
+		if (call->callee.text == "setting") {
+			auto resolvedPtr = project.getResolvedCallArgs(call);
+			if (resolvedPtr && !resolvedPtr->empty()) {
+				if (auto* keyId = std::get_if<rls::ast::Identifier>(&resolvedPtr->front()->node)) {
+					return "OptionFilter(" + keyId->name.text + ", True).check(" + ruleContextOptions() + ")";
+				}
+			}
+		}
+		// A call into a pure (no-arg) define: inline its body's build-time form.
+		if (auto it = project.DefineDecls.find(call->callee.text); it != project.DefineDecls.end()) {
+			return GenerateBuildTimeSettingCondition(it->second->body);
+		}
+	}
+
+	// Precondition violated (isBuildTimeSettingCondition should have gated this) -- fall back to
+	// the positive rendering rather than emit malformed output.
+	return GenerateExpression(expr);
+}
+
 bool ApTranspiler::isRuleConditionedRuleTernary(const rls::ast::TernaryExpr& node) const {
+	// A pure setting condition is evaluated at build time via .check(), so it is not the
+	// rule-conditioned case; the ternary stays an ordinary Python conditional (precedence 16).
+	if (isBuildTimeSettingCondition(node.condition)) {
+		return false;
+	}
 	// A ternary lowers to the rule idiom only when its condition is a rule (not a build-time
 	// value, which stays an ordinary Python `if`) and both branches are rules (a value branch
 	// could not be `&`-combined with the rule condition).
@@ -394,6 +459,15 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::TernaryExpr& node) 
 	// what access logic wants. It deliberately does NOT synthesize a complement rule (e.g.
 	// `is_adult()` for `is_child()`): the source never wrote one, and assuming the condition's
 	// negation is some specific other rule would bake in an invariant the game may not hold.
+	// A pure setting condition resolves at build time against world.options, so it can be a
+	// real Python condition via OptionFilter.check(). The ternary then lowers to an ordinary
+	// `a if <check> else b` for ANY branch types -- int (e.g. small_keys count), enum, or rule.
+	// This is exact: unlike the (C & a) | b idiom below it does not ungate the else-branch.
+	if (isBuildTimeSettingCondition(node.condition)) {
+		return GenerateExpression(node.thenBranch) + " if " +
+			   GenerateBuildTimeSettingCondition(node.condition) + " else " +
+			   GenerateExpression(node.elseBranch);
+	}
 	if (isRuleConditionedRuleTernary(node)) {
 		return "(" + GenerateChildExpression(node.condition, 9) + " & " +
 			   GenerateChildExpression(node.thenBranch, 9, true) + ") | " +
@@ -413,15 +487,29 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::TernaryExpr& node) 
 }
 
 std::string ApTranspiler::GenerateExpression(const rls::ast::CallExpr& node) const {
-	auto resolvedPtr = project.getResolvedCallArgs(&node);
-	if (resolvedPtr == nullptr) {
+	if (project.getResolvedCallArgs(&node) == nullptr) {
 		// Unknown calls or calls with semantic errors are blocked earlier in sema;
 		// emit empty as a defensive fallback so generation does not invent call forms.
 		return "";
 	}
-	const auto& resolved = *resolvedPtr;
 
-	// setting(KEY) is a truthiness check, emitted as an OptionFilter rule (AP-generic).
+	// A rule-conditioned ternary passed as a value argument is distributed over the call, turning
+	// it into a conditional rule (finding D). This runs before the setting/host/default dispatch
+	// so it also covers host-rewrite calls (e.g. small_keys(SCENE, rule ? 2 : 3)): each branch is
+	// re-rendered through the full dispatch (renderCall), so host rewrites still apply per branch.
+	if (auto distributed = tryDistributeTernaryArg(node)) {
+		return *distributed;
+	}
+
+	return renderCall(node, std::string::npos, nullptr);
+}
+
+std::string ApTranspiler::renderCall(const rls::ast::CallExpr& node, size_t overrideIdx,
+	const rls::ast::Expr* overrideExpr) const {
+	const auto& resolved = *project.getResolvedCallArgs(&node);
+
+	// setting(KEY) is a truthiness check, emitted as an OptionFilter rule (AP-generic). Its sole
+	// argument is a Setting key, never a distributed ternary branch, so the override never applies.
 	if (node.callee.text == "setting") {
 		if (auto* id = std::get_if<rls::ast::Identifier>(&resolved[0]->node)) {
 			return WrapOptionFilter(id->name.text + std::string(", True"));
@@ -429,13 +517,19 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::CallExpr& node) con
 		return "";
 	}
 
-	// Game-specific host-call rewrites (has, flag, trick, ...).
-	if (auto hostCall = renderHostCall(node)) {
+	// Game-specific host-call rewrites (has, flag, trick, small_keys, ...).
+	if (auto hostCall = renderHostCall(node, overrideIdx, overrideExpr)) {
 		return *hostCall;
 	}
 
 	// Default: a regular function call, optionally threading the rule-context
 	// receiver (e.g. SoH's `bundle`) as the implicit first argument.
+	return renderDefaultCall(node, overrideIdx, overrideExpr);
+}
+
+std::string ApTranspiler::renderDefaultCall(const rls::ast::CallExpr& node, size_t overrideIdx,
+	const rls::ast::Expr* overrideExpr) const {
+	const auto& resolved = *project.getResolvedCallArgs(&node);
 	std::ostringstream oss;
 	oss << node.callee.text << "(";
 	const std::string receiver = ruleContextParam();
@@ -450,10 +544,55 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::CallExpr& node) con
 		}
 		needComma = true;
 
-		oss << GenerateCallArgument(resolved[i], ResolveCallParamType(node, i));
+		const rls::ast::Expr* arg = (i == overrideIdx) ? overrideExpr : resolved[i];
+		oss << GenerateCallArgument(arg, ResolveCallParamType(node, i));
 	}
 	oss << ")";
 	return oss.str();
+}
+
+std::optional<std::string> ApTranspiler::tryDistributeTernaryArg(const rls::ast::CallExpr& node) const {
+	const auto* resolvedPtr = project.getResolvedCallArgs(&node);
+	if (resolvedPtr == nullptr) {
+		return std::nullopt;
+	}
+	// Only distribute when the call itself yields a Rule, so each branch call (f(A), f(B)) is a
+	// rule the conditional can hold. A value-returning callee (e.g. check_price/price_of) would
+	// otherwise wrap non-rule values in a conditional rule; leave it to the normal path, which
+	// diagnoses the rule-conditioned value ternary as unrepresentable.
+	if (ClassifyCall(node) != ValueClass::Rule) {
+		return std::nullopt;
+	}
+	const auto& resolved = *resolvedPtr;
+	for (size_t i = 0; i < resolved.size(); ++i) {
+		auto* tern = std::get_if<rls::ast::TernaryExpr>(&resolved[i]->node);
+		if (tern == nullptr) {
+			continue;
+		}
+		// A build-time or pure-setting condition already lowers to an ordinary Python `if`
+		// ternary in the argument -- it needs no rule to pick the branch.
+		if (isBuildTimeSettingCondition(tern->condition) ||
+			ClassifyExpression(tern->condition) != ValueClass::Rule) {
+			continue;
+		}
+		// Only value branches are distributed. A rule-branch ternary is representable directly
+		// (and never appears as a value argument, whose parameter is not a rule).
+		if (ExpressionIsRule(tern->thenBranch) || ExpressionIsRule(tern->elseBranch)) {
+			continue;
+		}
+		const std::string cond = GenerateExpression(tern->condition->node);
+		const std::string thenCall = renderCall(node, i, tern->thenBranch.get());
+		const std::string elseCall = renderCall(node, i, tern->elseBranch.get());
+		return renderConditionalRule(cond, thenCall, elseCall);
+	}
+	return std::nullopt;
+}
+
+std::string ApTranspiler::renderConditionalRule(const std::string& cond,
+	const std::string& thenExpr, const std::string& elseExpr) const {
+	const std::string receiver = ruleContextParam();
+	const std::string prefix = receiver.empty() ? "" : receiver + ", ";
+	return "rls_conditional(" + prefix + cond + ", " + thenExpr + ", " + elseExpr + ")";
 }
 
 std::optional<rls::ast::Type> ApTranspiler::ResolveCallParamType(

@@ -28,11 +28,19 @@ std::string ApTranspiler::ruleContextParam() const {
 	return "";
 }
 
+std::string ApTranspiler::ruleContextOptions() const {
+	// No generic accessor: how a rule lambda reaches world.options is world-specific (it depends
+	// on the shape of the rule-context receiver). Empty disables the build-time-setting lowering;
+	// a world overrides this to enable it.
+	return "";
+}
+
 std::string ApTranspiler::renderEnumValue(rls::ast::Type, const std::string& name) const {
 	return name;
 }
 
-std::optional<std::string> ApTranspiler::renderHostCall(const rls::ast::CallExpr&) const {
+std::optional<std::string> ApTranspiler::renderHostCall(const rls::ast::CallExpr&, size_t,
+	const rls::ast::Expr*) const {
 	return std::nullopt;
 }
 

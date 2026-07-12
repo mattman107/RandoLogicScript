@@ -71,17 +71,42 @@ TEST(ApDiagnostics, NegatingBuildTimeValueEmitsPythonNot) {
 // == ternary condition ========================================================
 
 // A rule-conditioned ternary with *rule* branches is no longer diagnosed: it lowers to the
-// `(C & a) | b` rule idiom (see ternary_tests.cpp). Only the value-branch case below remains
-// unrepresentable.
+// `(C & a) | b` rule idiom (see ternary_tests.cpp). A rule-conditioned ternary with *value*
+// branches fed into a rule-producing call is also representable -- it distributes into a
+// conditional rule (also ternary_tests.cpp). What remains unrepresentable is a rule-conditioned
+// ternary whose value is *itself* the result (below): there is no rule-producing call to lift.
 
-// A value-producing ternary whose condition is a rule (wallet_capacity style) is likewise
-// diagnosed -- it cannot produce a state-dependent integer.
+// A standalone value-producing ternary whose condition is a rule (wallet_capacity style) cannot
+// produce a state-dependent integer, and has no enclosing call to distribute over -- diagnosed.
 TEST(ApDiagnostics, RuleConditionedValueTernaryIsDiagnosed) {
 	expectOneError(generate(
 		"define test():\n"
 		"    has(RG_TYCOON_WALLET) ? 999 : 0\n",
 		"test"),
 		"ternary condition");
+}
+
+// The distribution only fires for a call that yields a Rule. A value-returning callee (price_of
+// -> Int) is left alone: wrapping its non-rule results in a conditional rule would be a
+// miscompile, so the rule-conditioned value ternary is diagnosed instead.
+TEST(ApDiagnostics, ValueCallWithRuleConditionedTernaryArgIsDiagnosed) {
+	expectOneError(generate(
+		"extern define price_of(item: Item) -> Int\n"
+		"define test():\n"
+		"    price_of(has(RG_CLIMB) ? RG_HOOKSHOT : RG_LONGSHOT)\n",
+		"test"),
+		"ternary condition");
+}
+
+// Only one ternary argument per call is distributed (no upstream case needs more). A second
+// rule-conditioned value ternary in the same call is safely diagnosed rather than miscompiled.
+TEST(ApDiagnostics, SecondTernaryArgInOneCallIsDiagnosed) {
+	GenResult result = generate(
+		"extern define f(a: Item, b: Item) -> Bool\n"
+		"define test():\n"
+		"    f(has(RG_CLIMB) ? RG_HOOKSHOT : RG_LONGSHOT, has(RG_BOW) ? RG_ARROWS : RG_BOMBS)\n",
+		"test");
+	EXPECT_FALSE(result.diagnostics.empty());
 }
 
 // A build-time ternary condition is fine: the value is frozen when the rule is built, so

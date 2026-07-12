@@ -71,6 +71,59 @@ constexpr BinaryRewrite kBinaryRewrites[] = {
 	{rls::ast::BinaryOp::GtEq, "collected_triforce_pieces", "required_triforce_pieces", "CanWinTriforceHunt()"},
 };
 
+// A threshold comparison `<callee>() >= N` (or `> N` / `!= N` / `== N`) against a state-dependent
+// count that the world exposes as an `_at_least`-style host rule taking the threshold as an
+// argument. Unlike kBinaryRewrites the right operand is an integer literal, not a call; the literal
+// is threaded into the helper. These re-evaluate against collection state, so the comparison lowers
+// to a Rule instead of a build-time-frozen Int (which ClassifyExpression rejects as a runtime value).
+//
+// `extraArg` is inserted before the amount, for a helper that also takes a fixed argument -- e.g.
+// GS tokens reuse the generic `has_item(bundle, <item>, count)`. `allowEq` permits `== N` (lowered
+// as `>= N`); it is sound only for a count compared at its cap (StoneCount() == 3 means all three
+// stones, so `== 3` is `>= 3`), NOT for an exact match like `hearts() == 3`, so it is off by default.
+struct ThresholdRewrite {
+	std::string_view rlsCallee;
+	std::string_view pyHelper;
+	std::string_view extraArg;
+	bool allowEq;
+};
+constexpr ThresholdRewrite kThresholdRewrites[] = {
+	{"fire_timer", "fire_timer_at_least", "", false},
+	{"water_timer", "water_timer_at_least", "", false},
+	{"hearts", "hearts_at_least", "", false},
+	{"effective_health", "effective_health_at_least", "", false},
+	// ocarina_buttons() >= N -> has_enough_ocarina_buttons(bundle, N). The world helper takes the
+	// exact required-button count, matching SoH's `OcarinaButtons() >= N` (e.g. ScarecrowsSong needs 2).
+	{"ocarina_buttons", "has_enough_ocarina_buttons", "", false},
+	// stone_count() == 3 -> has_enough_stones(bundle, 3). Spiritual stones cap at 3, so the SoH
+	// `StoneCount() == 3` ("have all stones") is exactly `>= 3`; allowEq makes `==` the cap check.
+	{"stone_count", "has_enough_stones", "", true},
+	// get_gs_count() >= N -> has_item(bundle, Items.RG_GOLD_SKULLTULA_TOKEN, N): the token count
+	// reuses the generic has_item count check, matching SoH's `GetGSCount() >= N` GS rewards.
+	{"get_gs_count", "has_item", "Items.RG_GOLD_SKULLTULA_TOKEN", false},
+};
+
+// The RLS `small_keys(scene, count)` (faithful to SoH's SmallKeys(scene, ...)) maps to the
+// world's `small_keys(bundle, key, requiredAmount)`, which keys by the dungeon's small-key
+// *item* rather than the scene. This table pairs each scene with that key item. Names diverge
+// in places (Thieves' Hideout uses the Gerudo Fortress key), so the mapping is explicit.
+struct SmallKeyScene {
+	std::string_view scene;
+	std::string_view keyItem;
+};
+constexpr SmallKeyScene kSmallKeyScenes[] = {
+	{"SCENE_FOREST_TEMPLE", "RG_FOREST_TEMPLE_SMALL_KEY"},
+	{"SCENE_FIRE_TEMPLE", "RG_FIRE_TEMPLE_SMALL_KEY"},
+	{"SCENE_WATER_TEMPLE", "RG_WATER_TEMPLE_SMALL_KEY"},
+	{"SCENE_BOTTOM_OF_THE_WELL", "RG_BOTTOM_OF_THE_WELL_SMALL_KEY"},
+	{"SCENE_SHADOW_TEMPLE", "RG_SHADOW_TEMPLE_SMALL_KEY"},
+	{"SCENE_THIEVES_HIDEOUT", "RG_GERUDO_FORTRESS_SMALL_KEY"},
+	{"SCENE_GERUDO_TRAINING_GROUND", "RG_GERUDO_TRAINING_GROUND_SMALL_KEY"},
+	{"SCENE_SPIRIT_TEMPLE", "RG_SPIRIT_TEMPLE_SMALL_KEY"},
+	{"SCENE_INSIDE_GANONS_CASTLE", "RG_GANONS_CASTLE_SMALL_KEY"},
+	{"SCENE_TREASURE_BOX_SHOP", "RG_TREASURE_GAME_SMALL_KEY"},
+};
+
 // RLS defines the world supplies by hand, so function generation skips them.
 // has_bottle is a hand-written rule in the reference Rules.py / LogicHelpers;
 // wallet_capacity is a state-dependent Int that only ever appears inside
@@ -115,28 +168,52 @@ std::string SohApTranspiler::renderEnumValue(rls::ast::Type type, const std::str
 	return name;
 }
 
-std::optional<std::string> SohApTranspiler::renderHostCall(const rls::ast::CallExpr& node) const {
+std::optional<std::string> SohApTranspiler::renderHostCall(const rls::ast::CallExpr& node,
+	size_t overrideIdx, const rls::ast::Expr* overrideExpr) const {
 	const auto* resolvedPtr = project.getResolvedCallArgs(&node);
 	if (!resolvedPtr || resolvedPtr->empty()) {
 		return std::nullopt;
 	}
 	const auto& resolved = *resolvedPtr;
 
+	// The argument at position `k`, honoring the ternary-distribution override (see renderCall):
+	// when distributing `f(.., C ? A : B, ..)`, each branch re-renders this call with the ternary
+	// argument replaced by A or B, so the rewrite emits the branch value in its place.
+	auto argAt = [&](size_t k) -> const rls::ast::Expr* {
+		return k == overrideIdx ? overrideExpr : resolved[k];
+	};
+
 	// Uniform `<helper>(bundle, <arg>)` rewrites (has/flag/trick).
 	for (const auto& rewrite : kHostCallRewrites) {
 		if (node.callee.text == rewrite.rlsCallee) {
-			return std::string(rewrite.pyHelper) + "(bundle, " + GenerateExpression(resolved[0]->node) + ")";
+			return std::string(rewrite.pyHelper) + "(bundle, " + GenerateExpression(argAt(0)->node) + ")";
 		}
 	}
 
 	if (node.callee.text == "check_price") {
 		// Special case: check_price(...) should output can_afford_slot(...).
 		// If the argument is an RC_UNKNOWN_CHECK identifier, use the current location from context.
-		if (auto* id = std::get_if<rls::ast::Identifier>(&resolved[0]->node);
+		if (auto* id = std::get_if<rls::ast::Identifier>(&argAt(0)->node);
 			id && id->name.text == "RC_UNKNOWN_CHECK" && currentLocationName.has_value()) {
 			return "can_afford_slot(Locations." + currentLocationName.value() + ")";
 		}
-		return "can_afford_slot(" + GenerateExpression(resolved[0]->node) + ")";
+		return "can_afford_slot(" + GenerateExpression(argAt(0)->node) + ")";
+	}
+
+	if (node.callee.text == "small_keys") {
+		// Rewrite `small_keys(SCENE_X, count)` to `small_keys(bundle, key, count)`: map the
+		// scene to its small-key item (see kSmallKeyScenes), bundle first per convention. When a
+		// rule-conditioned count ternary is distributed, argAt(1) is the selected branch count.
+		if (auto* sceneId = std::get_if<rls::ast::Identifier>(&argAt(0)->node)) {
+			for (const auto& mapping : kSmallKeyScenes) {
+				if (sceneId->name.text == mapping.scene) {
+					return "small_keys(" + ruleContextParam() + ", Items." +
+						std::string(mapping.keyItem) + ", " + GenerateExpression(argAt(1)->node) + ")";
+				}
+			}
+		}
+		// Unknown scene: fall through to the default call form rather than guess a key item.
+		return std::nullopt;
 	}
 
 	return std::nullopt;
@@ -157,6 +234,37 @@ std::optional<std::string> SohApTranspiler::renderBinarySpecialCase(const rls::a
 			return rewrite.replacement.empty()
 				? GenerateExpression(node.left)
 				: std::string(rewrite.replacement);
+		}
+	}
+
+	// Threshold comparison `<callee>() >= N` / `> N` / `!= N` / `== N` -> the world's
+	// `_at_least(bundle, N)` host rule. `> N` and `!= N` normalize to `>= N + 1`; the `!= N`
+	// form is valid only because these counts have a floor at the target (e.g. effective
+	// health is always >= 1, so `!= 1` means `>= 2`). `== N` (allowEq entries only) lowers as
+	// `>= N`, sound when the count is compared at its cap. See kThresholdRewrites.
+	if (node.op == rls::ast::BinaryOp::GtEq || node.op == rls::ast::BinaryOp::Gt ||
+		node.op == rls::ast::BinaryOp::NotEq || node.op == rls::ast::BinaryOp::Eq) {
+		auto* leftCall = std::get_if<rls::ast::CallExpr>(&node.left->node);
+		auto* rightLit = std::get_if<rls::ast::IntLiteral>(&node.right->node);
+		if (leftCall && rightLit) {
+			for (const auto& rewrite : kThresholdRewrites) {
+				if (leftCall->callee.text != rewrite.rlsCallee) {
+					continue;
+				}
+				// `==` is only a threshold (cap) check for entries that opt in; otherwise leave it
+				// as a raw comparison, which classifies as a runtime value and is diagnosed.
+				if (node.op == rls::ast::BinaryOp::Eq && !rewrite.allowEq) {
+					break;
+				}
+				const bool plusOne = node.op == rls::ast::BinaryOp::Gt || node.op == rls::ast::BinaryOp::NotEq;
+				const int amount = rightLit->value + (plusOne ? 1 : 0);
+				std::string args = ruleContextParam() + ", ";
+				if (!rewrite.extraArg.empty()) {
+					args += std::string(rewrite.extraArg) + ", ";
+				}
+				args += std::to_string(amount);
+				return std::string(rewrite.pyHelper) + "(" + args + ")";
+			}
 		}
 	}
 

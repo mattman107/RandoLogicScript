@@ -15,6 +15,11 @@ std::string SohApTranspiler::ruleContextParam() const {
 	return "bundle";
 }
 
+std::string SohApTranspiler::ruleContextOptions() const {
+	// SoH's rule-context receiver is the bundle `(region, world)`, so options live at bundle[1].
+	return ruleContextParam() + "[1].options";
+}
+
 void Transpile(const rls::ast::Project& project, rls::OutputWriter& out) {
 	SohApTranspiler(project).Transpile(out);
 }

@@ -74,8 +74,11 @@ ApTranspiler::ValueClass ApTranspiler::ClassifyExpression(const rls::ast::Expr* 
 		if (thenClass == ValueClass::Rule || elseClass == ValueClass::Rule) {
 			return ValueClass::Rule;
 		}
+		// A pure setting condition is evaluated at build time (OptionFilter.check()), so a
+		// ternary with build-time branches over one stays build-time -- not a runtime value.
 		ValueClass condClass = ClassifyExpression(ternary->condition);
-		return condClass == ValueClass::BuildTime ? ValueClass::BuildTime : ValueClass::Runtime;
+		bool condBuildTime = condClass == ValueClass::BuildTime || isBuildTimeSettingCondition(ternary->condition);
+		return condBuildTime ? ValueClass::BuildTime : ValueClass::Runtime;
 	}
 
 	// A match mirrors the ternary: a Rule if any arm body is a Rule; build-time only if
@@ -112,39 +115,52 @@ ApTranspiler::ValueClass ApTranspiler::ClassifyExpression(const rls::ast::Expr* 
 	}
 
 	if (auto* call = std::get_if<rls::ast::CallExpr>(&node)) {
-		// setting(KEY) used as a truthiness guard lowers to an OptionFilter rule.
-		if (call->callee.text == "setting") {
-			return ValueClass::Rule;
-		}
-		// A call into a user define takes the define's own class. A Rule define is a Rule
-		// regardless of its arguments; a value-define is build-time unless an argument is
-		// itself runtime (or a rule spliced into a value parameter), which it then is.
-		if (auto it = project.DefineDecls.find(call->callee.text); it != project.DefineDecls.end()) {
-			ValueClass defineClass = DefineClass(it->second);
-			if (defineClass == ValueClass::Rule) {
-				return ValueClass::Rule;
-			}
-			ValueClass combined = defineClass;
-			if (auto* args = project.getResolvedCallArgs(call)) {
-				for (const rls::ast::Expr* arg : *args) {
-					combined = JoinClass(combined, ClassifyExpression(arg));
-				}
-			}
-			return combined;
-		}
-		// A host/extern function returning Bool is a runtime rule (has, can_use, trick,
-		// is_child, ...). Any other host return -- notably Int (bottle_count,
-		// check_price, the triforce counts) -- is a runtime non-rule value: it depends on
-		// collection state but is not itself a Rule.
-		if (auto it = project.ExternDefineDecls.find(call->callee.text); it != project.ExternDefineDecls.end()) {
-			const bool returnsBool = it->second->returnType && it->second->returnType->name.text == "Bool";
-			return returnsBool ? ValueClass::Rule : ValueClass::Runtime;
-		}
-		// Unknown callee (blocked earlier in sema): assume a host rule, conservatively.
-		return ValueClass::Rule;
+		return ClassifyCall(*call);
 	}
 
 	return ValueClass::BuildTime;
+}
+
+ApTranspiler::ValueClass ApTranspiler::ClassifyCall(const rls::ast::CallExpr& call) const {
+	// setting(KEY) used as a truthiness guard lowers to an OptionFilter rule.
+	if (call.callee.text == "setting") {
+		return ValueClass::Rule;
+	}
+	// A call into a user define takes the define's own class. A Rule define is a Rule
+	// regardless of its arguments; a value-define is build-time unless an argument is
+	// itself runtime (or a rule spliced into a value parameter), which it then is.
+	if (auto it = project.DefineDecls.find(call.callee.text); it != project.DefineDecls.end()) {
+		// A host-provided define (has_bottle, ...) is lowered as an opaque host call, not
+		// by inlining its RLS body, so its class is what the host rule returns -- exactly
+		// like an extern below. Classifying it by its body instead would read has_bottle's
+		// `bottle_count() >= 1` as a Runtime value and reject any rule combination.
+		if (isHostProvidedDefine(call.callee.text)) {
+			return project.getType(it->second->body.get()) == rls::ast::Type::Bool
+				? ValueClass::Rule
+				: ValueClass::Runtime;
+		}
+		ValueClass defineClass = DefineClass(it->second);
+		if (defineClass == ValueClass::Rule) {
+			return ValueClass::Rule;
+		}
+		ValueClass combined = defineClass;
+		if (auto* args = project.getResolvedCallArgs(&call)) {
+			for (const rls::ast::Expr* arg : *args) {
+				combined = JoinClass(combined, ClassifyExpression(arg));
+			}
+		}
+		return combined;
+	}
+	// A host/extern function returning Bool is a runtime rule (has, can_use, trick,
+	// is_child, ...). Any other host return -- notably Int (bottle_count,
+	// check_price, the triforce counts) -- is a runtime non-rule value: it depends on
+	// collection state but is not itself a Rule.
+	if (auto it = project.ExternDefineDecls.find(call.callee.text); it != project.ExternDefineDecls.end()) {
+		const bool returnsBool = it->second->returnType && it->second->returnType->name.text == "Bool";
+		return returnsBool ? ValueClass::Rule : ValueClass::Runtime;
+	}
+	// Unknown callee (blocked earlier in sema): assume a host rule, conservatively.
+	return ValueClass::Rule;
 }
 
 bool ApTranspiler::ExpressionIsRule(const rls::ast::ExprPtr& expr) const {

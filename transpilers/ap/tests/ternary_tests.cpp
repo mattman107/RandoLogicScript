@@ -60,3 +60,27 @@ TEST(ApTernary, NestedElseTernaryChains) {
 		"test")),
 		"(has(RG_HOOKSHOT) & has(RG_BOW)) | ((has(RG_SLINGSHOT) & has(RG_BOOMERANG)) | has(RG_HAMMER))");
 }
+
+// When a rule-conditioned ternary's branches are VALUES fed into a call, they cannot be
+// `&`-combined with the condition, so the call is distributed over the branches into a conditional
+// rule that picks a branch at solve time: `f(C ? A : B)` -> `rls_conditional(C, f(A), f(B))`. This
+// is the faithful lowering of the C++ ternary and needs no rule negation. (SoH-specific rendering
+// -- bundle receiver, enum prefixes, host rewrites -- is covered in soh_ap's host_rewrite_tests.)
+TEST(ApTernary, RuleConditionedValueBranchArgDistributesToConditional) {
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    can_use(has(RG_CLIMB) ? RG_HOOKSHOT : RG_LONGSHOT)\n",
+		"test")),
+		"rls_conditional(has(RG_CLIMB), can_use(RG_HOOKSHOT), can_use(RG_LONGSHOT))");
+}
+
+// Distribution is scoped to RULE conditions. A build-time condition (a Bool parameter) leaves the
+// ternary an ordinary Python `if` selecting the value in place -- no conditional rule, no
+// duplicated call.
+TEST(ApTernary, BuildTimeConditionedValueBranchArgStaysPythonIf) {
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test(pick: Bool):\n"
+		"    can_use(pick ? RG_HOOKSHOT : RG_LONGSHOT)\n",
+		"test")),
+		"can_use(RG_HOOKSHOT if pick else RG_LONGSHOT)");
+}

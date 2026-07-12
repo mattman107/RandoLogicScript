@@ -62,6 +62,14 @@ protected:
 	// meaning calls/signatures take no implicit receiver.
 	virtual std::string ruleContextParam() const;
 
+	// Python expression for the world's options dataclass, reached from a rule lambda's
+	// receiver -- passed to OptionFilter.check() to evaluate a setting comparison as a
+	// build-time bool. How a lambda reaches world.options is world-specific (it depends on the
+	// receiver's shape), so the default is empty, which disables the build-time-setting lowering
+	// (a setting-conditioned ternary then falls back to a diagnostic). A world overrides this to
+	// enable it -- e.g. SoH's bundle is `(region, world)`, so it returns "bundle[1].options".
+	virtual std::string ruleContextOptions() const;
+
 	// Render an enum-value identifier (e.g. RG_HOOKSHOT) to its Python form.
 	// Default: the bare value name. Override to add world enum-class prefixes
 	// and value overrides (e.g. RO_GENERIC_YES -> "True").
@@ -70,7 +78,11 @@ protected:
 	// Rewrite a host/builtin call (has, flag, trick, ...) to Python. Default:
 	// std::nullopt, so the core emits the default call form `callee(args...)`
 	// (with the ruleContextParam() receiver prepended when one is set).
-	virtual std::optional<std::string> renderHostCall(const rls::ast::CallExpr& node) const;
+	// `overrideIdx`/`overrideExpr` let the ternary distribution re-render the call with one
+	// argument replaced (see renderCall); when overrideIdx is std::string::npos there is no
+	// override and every argument comes from the resolved call args as usual.
+	virtual std::optional<std::string> renderHostCall(const rls::ast::CallExpr& node,
+		size_t overrideIdx = std::string::npos, const rls::ast::Expr* overrideExpr = nullptr) const;
 
 	// Rewrite a world-specific binary special case. Default: std::nullopt
 	// (normal binary-operator handling).
@@ -139,6 +151,11 @@ private:
 	ValueClass ClassifyExpression(const rls::ast::Expr* expr) const;
 	ValueClass ClassifyExpression(const rls::ast::ExprPtr& expr) const;
 
+	// The value class of a call, by its callee's return semantics (setting/define/extern).
+	// Shared by ClassifyExpression and the ternary distribution guard so both agree on which
+	// calls produce a Rule.
+	ValueClass ClassifyCall(const rls::ast::CallExpr& call) const;
+
 	// Combine two operand classes for an operator that folds its operands: Runtime
 	// dominates Rule dominates BuildTime.
 	static ValueClass JoinClass(ValueClass a, ValueClass b);
@@ -188,6 +205,39 @@ private:
 	// evaluated lazily; an argument already of Condition type is passed through unchanged.
 	std::string GenerateCallArgument(const rls::ast::Expr* argExpr, std::optional<rls::ast::Type> paramType) const;
 
+	// Dispatch a call to its emitted form: the setting truthiness check, a world host-call
+	// rewrite (renderHostCall), or the default `<callee>(<ctx>, <args>...)` form. `overrideIdx`/
+	// `overrideExpr` replace one resolved argument (used when distributing a call over a ternary's
+	// branches -- each branch re-renders through this same dispatch so host rewrites still apply).
+	// Precondition: node has resolved call args.
+	std::string renderCall(const rls::ast::CallExpr& node, size_t overrideIdx,
+		const rls::ast::Expr* overrideExpr) const;
+
+	// Render a plain function call `<callee>(<ctx>, <args>...)`, threading the rule-context
+	// receiver. If `overrideIdx` is a valid argument index, `overrideExpr` is generated in place
+	// of the resolved argument there -- used to distribute a call over a ternary's branches.
+	// Precondition: node has resolved call args.
+	std::string renderDefaultCall(const rls::ast::CallExpr& node, size_t overrideIdx,
+		const rls::ast::Expr* overrideExpr) const;
+
+	// If a call argument is a rule-conditioned ternary whose branches are (non-rule) build-time
+	// values -- e.g. `can_use(is_adult() ? RG_HOOKSHOT : RG_LONGSHOT)` -- the branches cannot be
+	// &/|-combined with the rule condition, so the ternary is not directly representable. Instead
+	// we lift the call over the ternary: `f(.., C ? A : B, ..)` becomes
+	// `rls_conditional(<ctx>, C, f(..,A,..), f(..,B,..))`, a solve-time pick between the two rules
+	// that mirrors the source ternary exactly (see renderConditionalRule). Returns the distributed
+	// call when such an argument exists, else std::nullopt (the caller renders the call normally).
+	// A build-time or pure-setting condition is left alone (it stays an ordinary Python `if`), as
+	// is a runtime non-rule condition (which remains a diagnosed, unrepresentable value).
+	std::optional<std::string> tryDistributeTernaryArg(const rls::ast::CallExpr& node) const;
+
+	// Render a conditional (if-then-else) rule `rls_conditional(<ctx>, <cond>, <then>, <else>)`: a
+	// host rule that evaluates <cond> at solve time and picks <then> or <else> accordingly. This
+	// is the faithful lowering of a rule-conditioned ternary -- unlike the `(C & a) | b` idiom it
+	// does not ungate the else-branch, and it needs no rule negation.
+	std::string renderConditionalRule(const std::string& cond, const std::string& thenExpr,
+		const std::string& elseExpr) const;
+
 	std::string GenerateExpression(const rls::ast::HereRef& node) const;
 	std::string GenerateExpression(const rls::ast::MatchExpr& node) const;
 
@@ -203,6 +253,16 @@ private:
 	// When `negate`, renders its negation by flipping eq <-> "ne". Shared by the positive
 	// path (TryGenerateOptionFilter) and the De Morgan negation.
 	std::string renderSettingOptionFilter(const rls::ast::BinaryExpr& node, bool negate) const;
+
+	// The `<key>, <value>[, "ne"]` argument list for an OptionFilter (precondition:
+	// IsSettingComparison). `negate` flips eq <-> "ne". Shared by the rule-wrapping form
+	// (renderSettingOptionFilter) and the build-time .check() form (renderSettingCheck).
+	std::string optionFilterArgs(const rls::ast::BinaryExpr& node, bool negate) const;
+
+	// Render a setting comparison as a build-time bool: `OptionFilter(<args>).check(<options>)`.
+	// Precondition: IsSettingComparison(node) and a non-empty ruleContextOptions(). Unlike the
+	// rule form, this yields a plain Python bool usable as a ternary condition.
+	std::string renderSettingCheck(const rls::ast::BinaryExpr& node) const;
 
 	// Wraps an OptionFilter argument list as a standalone RuleBuilder rule:
 	// `True_(options=[OptionFilter(<args>)])`. A bare OptionFilter is not a Rule and cannot
@@ -235,6 +295,22 @@ private:
 	// Precedence of the form GenerateNegatedOptionFilterRule emits (the De Morgan dual swaps
 	// and/or), so parenthesization of a negated rule stays in sync with its rendering.
 	int NegatedPrecedence(const rls::ast::ExprPtr& expr) const;
+
+	// == Build-time evaluation of settings ====================================
+	// A pure option-filter expression resolves entirely from `world.options`, which is frozen
+	// at generation. So in a *build-time boolean* position (a ternary condition, where a Rule
+	// cannot go because `bool(rule)` raises) it lowers to plain Python over
+	// `OptionFilter(...).check(<options>)` calls, rather than the OptionFilter-attached rule
+	// form used when a setting comparison combines *with* rules via & / |.
+
+	// True iff `cond` can be evaluated as a build-time bool here: it is a pure option-filter
+	// expression and the world exposes an options accessor (ruleContextOptions() non-empty).
+	bool isBuildTimeSettingCondition(const rls::ast::ExprPtr& cond) const;
+
+	// Render a pure option-filter expression as a build-time Python bool (precondition:
+	// isBuildTimeSettingCondition(expr)): setting leaves become OptionFilter(...).check(...),
+	// and `and`/`or`/`not`/pure-define nodes become the matching Python boolean operators.
+	std::string GenerateBuildTimeSettingCondition(const rls::ast::ExprPtr& expr) const;
 	// As GenerateChildExpression, but for a negated child: wraps using NegatedPrecedence.
 	std::string GenerateNegatedChild(const rls::ast::ExprPtr& expr, int parentPrec, bool isRightChild = false) const;
 };
