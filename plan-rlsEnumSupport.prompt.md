@@ -17,11 +17,11 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Add/adjust AST and sema tests for completed Phase 1 slices.
 
 **Phase 2 - Grammar, AST, And Parsing**
-- [ ] Add top-level declarations enum and extern enum to grammar declaration alternatives, reserved keywords, parse-tree selector, and builder dispatch.
-- [ ] Add member-access expression syntax for EnumName.ValueName and AST node MemberExpr (or EnumValueRef equivalent) to represent dotted disambiguation explicitly.
-- [ ] Add enum member syntax supporting optional explicit integer assignment, with auto-increment for omitted values.
-- [ ] Add extern enum member entries supporting explicit names and glob pattern entries.
-- [ ] Add parser diagnostics for new keyword expectations and malformed enum declarations.
+- [x] Add top-level declarations enum and extern enum to grammar declaration alternatives, reserved keywords, parse-tree selector, and builder dispatch.
+- [x] Add member-access expression syntax for EnumName.ValueName and AST node MemberExpr (or EnumValueRef equivalent) to represent dotted disambiguation explicitly.
+- [x] Add enum member syntax supporting optional explicit integer assignment, with auto-increment for omitted values.
+- [x] Add extern enum member entries supporting explicit names and glob pattern entries.
+- [x] Add parser diagnostics for new keyword expectations and malformed enum declarations.
 
 **Phase 3 - Declaration Collection And Validation**
 - [ ] Extend collectDeclarations to gather EnumDecl and ExternEnumDecl into global lookup maps and detect duplicate enum names.
@@ -63,6 +63,8 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 
 **History (condensed)**
 - 2026-06-25: Completed Phase 1 slices 1-5 (AST enum foundation, optional values, option 1 entry split, sema helper wiring, builtin enum identity scaffolding).
+- 2026-06-25: Completed Phase 2 slice for enum/extern enum declarations (grammar + parse-tree selector + AST/builder wiring), added parser tests, and validated parser test suite.
+- 2026-06-26: Completed Phase 2 slice for dotted enum member-access parsing (`EnumName.ValueName`) with malformed-case parser tests and full-suite validation.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)

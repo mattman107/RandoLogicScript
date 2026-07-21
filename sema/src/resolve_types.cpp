@@ -781,6 +781,14 @@ struct ExprResolver {
 		return T::Bool;
 	}
 
+	ast::Type resolve(const ast::MemberExpr& node, const ast::Expr& expr) {
+		// Phase 4 will implement full enum-aware member resolution.
+		// For now, return Type::Enum so the expression is well-typed and
+		// subsequent passes can look up the enum identity from the side-table.
+		project.setEnumType(&expr, node.object.text);
+		return T::Enum;
+	}
+
 	ast::Type resolve(ast::HereRef& node, ast::Expr& expr) {
 		if (!currentRegion.has_value()) {
 			diags.push_back({

@@ -190,6 +190,16 @@ struct HereRef {
 	Name resolvedRegion; ///< Filled in by sema; empty until resolved.
 };
 
+/// Member access: `EnumName.ValueName` — dotted enum value disambiguation.
+/// `object` is the enum type name; `member` is the value name.
+struct MemberExpr {
+	Name object;
+	Name member;
+
+	MemberExpr(Name object, Name member)
+		: object(std::move(object)), member(std::move(member)) {}
+};
+
 /// One arm of a `match` expression.
 struct MatchArm {
 	std::vector<ExprPtr> patterns;      // one or more match expressions
@@ -222,6 +232,7 @@ struct Expr {
 		BoolLiteral,
 		IntLiteral,
 		Identifier,
+		MemberExpr,
 		UnaryExpr,
 		BinaryExpr,
 		TernaryExpr,
@@ -374,8 +385,61 @@ struct ExternDefineDecl {
 		  span(span) {}
 };
 
-/// A top-level declaration: region, extend region, define, or extern define.
-using Decl = std::variant<RegionDecl, ExtendRegionDecl, DefineDecl, ExternDefineDecl>;
+/// One explicit enum member: `NAME` or `NAME = 3`.
+struct EnumMemberDecl {
+	Name name;
+	std::optional<int> explicitValue;
+	Span span;
+
+	EnumMemberDecl(Name name, std::optional<int> explicitValue = std::nullopt,
+	               Span span = {})
+		: name(std::move(name)),
+		  explicitValue(explicitValue),
+		  span(std::move(span)) {}
+};
+
+/// One glob pattern entry for extern enums, e.g. `RG_*`.
+struct EnumPatternDecl {
+	std::string pattern;
+	Span span;
+
+	EnumPatternDecl(std::string pattern, Span span = {})
+		: pattern(std::move(pattern)), span(std::move(span)) {}
+};
+
+using ExternEnumEntryDecl = std::variant<EnumMemberDecl, EnumPatternDecl>;
+
+/// `enum Name { A, B = 2 }`
+struct EnumDecl {
+	Name name;
+	std::vector<EnumMemberDecl> members;
+	Span span;
+
+	EnumDecl(Name name, std::vector<EnumMemberDecl> members, Span span = {})
+		: name(std::move(name)), members(std::move(members)), span(std::move(span)) {}
+};
+
+/// `extern enum Name { A, RG_* }`
+struct ExternEnumDecl {
+	Name name;
+	std::vector<ExternEnumEntryDecl> entries;
+	Span span;
+
+	ExternEnumDecl(Name name, std::vector<ExternEnumEntryDecl> entries,
+	               Span span = {})
+		: name(std::move(name)), entries(std::move(entries)), span(std::move(span)) {}
+};
+
+/// A top-level declaration: region, extend region, define, extern define,
+/// enum, or extern enum.
+using Decl = std::variant<
+	RegionDecl,
+	ExtendRegionDecl,
+	DefineDecl,
+	ExternDefineDecl,
+	EnumDecl,
+	ExternEnumDecl
+>;
 
 // == Diagnostics ==============================================================
 

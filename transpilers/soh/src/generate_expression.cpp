@@ -215,6 +215,12 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::InvokeExpr& node) 
     return GenerateExpression(node.callee) + "()";
 }
 
+std::string SohTranspiler::GenerateExpression(const rls::ast::MemberExpr& node) const {
+	// Phase 5 will resolve the enum namespace from registry metadata.
+	// For now emit the member name unqualified so existing C++ enum lookup still works.
+	return node.member.text;
+}
+
 std::string SohTranspiler::GenerateExpression(const rls::ast::HereRef& node) const {
     return "RandomizerRegion::" + node.resolvedRegion.text;
 }
