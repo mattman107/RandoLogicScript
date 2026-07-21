@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <format>
 #include <queue>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -16,6 +17,177 @@ static const char* sectionKindName(ast::SectionKind kind) {
 	case ast::SectionKind::Exits:     return "exit";
 	}
 	return "entry";
+}
+
+static bool globMatches(std::string_view pattern, std::string_view value) {
+	// Simple '*' wildcard matcher (matches zero or more chars).
+	size_t p = 0;
+	size_t v = 0;
+	size_t star = std::string_view::npos;
+	size_t backtrack = 0;
+
+	while (v < value.size()) {
+		if (p < pattern.size() && pattern[p] == value[v]) {
+			++p;
+			++v;
+			continue;
+		}
+		if (p < pattern.size() && pattern[p] == '*') {
+			star = p++;
+			backtrack = v;
+			continue;
+		}
+		if (star != std::string_view::npos) {
+			p = star + 1;
+			v = ++backtrack;
+			continue;
+		}
+		return false;
+	}
+
+	while (p < pattern.size() && pattern[p] == '*') {
+		++p;
+	}
+
+	return p == pattern.size();
+}
+
+static void checkEnumDeclarations(
+	ast::Project& project, std::vector<ast::Diagnostic>& diags)
+{
+	std::unordered_map<std::string, std::set<std::string>> valueNameToEnums;
+
+	for (auto& [enumName, info] : project.EnumInfos) {
+		if (info.kind == ast::EnumKind::Normal) {
+			std::unordered_set<std::string> seenNames;
+			std::unordered_set<int> seenValues;
+			std::vector<ast::EnumEntryInfo> normalized;
+			normalized.reserve(info.entries.size());
+
+			int nextValue = 0;
+			for (const auto& entry : info.entries) {
+				if (std::holds_alternative<ast::EnumPatternInfo>(entry)) {
+					const auto& pattern = std::get<ast::EnumPatternInfo>(entry);
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("enum '{}' cannot contain wildcard pattern '{}'", enumName, pattern.pattern),
+						pattern.span
+					});
+					continue;
+				}
+
+				auto member = std::get<ast::EnumMemberInfo>(entry);
+				if (!seenNames.insert(member.name.text).second) {
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("duplicate enum member '{}' in enum '{}'", member.name.text, enumName),
+						member.span
+					});
+					continue;
+				}
+
+				if (member.value.has_value()) {
+					nextValue = *member.value;
+				} else {
+					member.value = nextValue;
+				}
+
+				if (!seenValues.insert(*member.value).second) {
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("duplicate enum value {} in enum '{}'", *member.value, enumName),
+						member.span
+					});
+				}
+
+				nextValue = *member.value + 1;
+				normalized.emplace_back(std::move(member));
+			}
+
+			info.entries = std::move(normalized);
+
+			for (const auto& entry : info.entries) {
+				if (std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+					const auto& member = std::get<ast::EnumMemberInfo>(entry);
+					valueNameToEnums[member.name.text].insert(enumName);
+				}
+			}
+			continue;
+		}
+
+		// Extern enums: explicit members and wildcard patterns are allowed.
+		if (info.entries.empty()) {
+			diags.push_back({
+				ast::DiagnosticLevel::Error,
+				std::format("extern enum '{}' must declare at least one member or wildcard pattern", enumName),
+				info.span
+			});
+			continue;
+		}
+
+		std::unordered_set<std::string> explicitNames;
+		std::vector<std::string> patterns;
+		for (const auto& entry : info.entries) {
+			if (std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+				const auto& member = std::get<ast::EnumMemberInfo>(entry);
+				if (!explicitNames.insert(member.name.text).second) {
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("duplicate enum member '{}' in extern enum '{}'", member.name.text, enumName),
+						member.span
+					});
+				}
+				valueNameToEnums[member.name.text].insert(enumName);
+			} else {
+				const auto& pattern = std::get<ast::EnumPatternInfo>(entry);
+				patterns.push_back(pattern.pattern);
+			}
+		}
+
+		// Check wildcard overlap against explicit sibling members.
+		// Full host-registry matching is deferred to Phase 4: the identifier
+		// resolver calls globMatches(pattern, identifierName) at use-site rather
+		// than materialising a concrete member list here.
+		for (const auto& pattern : patterns) {
+			for (const auto& explicitName : explicitNames) {
+				if (globMatches(pattern, explicitName)) {
+					diags.push_back({
+						ast::DiagnosticLevel::Warning,
+						std::format(
+							"extern enum '{}' wildcard '{}' overlaps explicit member '{}'",
+							enumName,
+							pattern,
+							explicitName),
+						info.span
+					});
+				}
+			}
+		}
+	}
+
+	for (const auto& [valueName, enums] : valueNameToEnums) {
+		if (enums.size() <= 1) {
+			continue;
+		}
+		std::string enumList;
+		bool first = true;
+		for (const auto& enumName : enums) {
+			if (!first) {
+				enumList += ", ";
+			}
+			enumList += enumName;
+			first = false;
+		}
+
+		diags.push_back({
+			ast::DiagnosticLevel::Warning,
+			std::format(
+				"enum value '{}' appears in multiple enums ({}) and may require dotted disambiguation",
+				valueName,
+				enumList),
+			{}
+		});
+	}
 }
 
 /// Check 1: Every extend-region must target a declared region.
@@ -343,6 +515,7 @@ std::vector<ast::Diagnostic> validateDeclarations(ast::Project& project) {
 	checkRegionReachability(project, diags);
 	checkUnusedDefines(project, diags);
 	checkFunctionSignatures(project, diags);
+	checkEnumDeclarations(project, diags);
 
 	return diags;
 }

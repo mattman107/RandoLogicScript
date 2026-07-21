@@ -24,12 +24,12 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Add parser diagnostics for new keyword expectations and malformed enum declarations.
 
 **Phase 3 - Declaration Collection And Validation**
-- [ ] Extend collectDeclarations to gather EnumDecl and ExternEnumDecl into global lookup maps and detect duplicate enum names.
-- [ ] Validate enum member rules.
-- [ ] Normal enum: no wildcard members allowed; duplicate member names forbidden; computed integer values unique.
-- [ ] Extern enum: explicit members and glob patterns allowed; at least one member source (explicit or wildcard) required.
-- [ ] Expand extern glob patterns against host enum registry (randomizer enum metadata), then materialize concrete members and detect overlaps/duplicates after expansion.
-- [ ] Validate collisions between enum value names across enums are permitted but marked as potentially ambiguous for use-site resolution.
+- [x] Extend collectDeclarations to gather EnumDecl and ExternEnumDecl into global lookup maps and detect duplicate enum names.
+- [x] Validate enum member rules.
+- [x] Normal enum: no wildcard members allowed; duplicate member names forbidden; computed integer values unique.
+- [x] Extern enum: explicit members and glob patterns allowed; at least one member source (explicit or wildcard) required.
+- [x] Expand extern glob patterns against host enum registry (randomizer enum metadata), then materialize concrete members and detect overlaps/duplicates after expansion. *(Approach: glob patterns are matched at identifier resolution time in Phase 4 rather than materialised here; sibling overlap is checked at validation time.)*
+- [x] Validate collisions between enum value names across enums are permitted but marked as potentially ambiguous for use-site resolution.
 
 **Phase 4 - Identifier And Expression Type Resolution**
 - [ ] Replace prefix-only typeFromIdentifier behavior with two-stage lookup.
@@ -65,6 +65,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-06-25: Completed Phase 1 slices 1-5 (AST enum foundation, optional values, option 1 entry split, sema helper wiring, builtin enum identity scaffolding).
 - 2026-06-25: Completed Phase 2 slice for enum/extern enum declarations (grammar + parse-tree selector + AST/builder wiring), added parser tests, and validated parser test suite.
 - 2026-06-26: Completed Phase 2 slice for dotted enum member-access parsing (`EnumName.ValueName`) with malformed-case parser tests and full-suite validation.
+- 2026-07-20: Completed Phase 3 collection/validation slice for enum declarations, enum value assignment checks, extern enum entry rules, and cross-enum ambiguity warnings.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)

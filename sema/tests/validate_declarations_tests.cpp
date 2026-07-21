@@ -709,3 +709,118 @@ TEST(ValidateDeclarations, ExternDefineUntypedParamWithoutDefault) {
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("must have a type annotation or a default value"), std::string::npos);
 }
+
+// == Enum validation =========================================================
+
+TEST(ValidateDeclarations, EnumAutoIncrementAndExplicitValues) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { RG_A, RG_B = 4, RG_C }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 0u);
+	ASSERT_TRUE(project.EnumInfos.contains("Item"));
+	const auto& info = project.EnumInfos.at("Item");
+	ASSERT_EQ(info.entries.size(), 3u);
+
+	auto valueAt = [&](size_t i) {
+		return std::get<EnumMemberInfo>(info.entries[i]).value;
+	};
+	ASSERT_TRUE(valueAt(0).has_value());
+	ASSERT_TRUE(valueAt(1).has_value());
+	ASSERT_TRUE(valueAt(2).has_value());
+	EXPECT_EQ(*valueAt(0), 0);
+	EXPECT_EQ(*valueAt(1), 4);
+	EXPECT_EQ(*valueAt(2), 5);
+}
+
+TEST(ValidateDeclarations, EnumDuplicateMemberName) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { RG_A, RG_A }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("duplicate enum member 'RG_A'"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, EnumDuplicateComputedValue) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { RG_A = 3, RG_B = 3 }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("duplicate enum value 3"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, ExternEnumMustHaveAtLeastOneEntry) {
+	auto [project, diags] = validateFromSource(
+		"extern enum Item {}\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("must declare at least one member or wildcard pattern"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, ExternEnumDuplicateExplicitMemberName) {
+	auto [project, diags] = validateFromSource(
+		"extern enum Item { RG_A, RG_A }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("duplicate enum member 'RG_A' in extern enum 'Item'"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, ExternEnumWildcardOverlapsExplicitMemberWarning) {
+	auto [project, diags] = validateFromSource(
+		"extern enum Item { RG_A, RG_* }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 0u);
+	bool foundWarning = false;
+	for (const auto& d : diags) {
+		if (d.level == DiagnosticLevel::Warning &&
+			d.message.find("wildcard 'RG_*' overlaps explicit member 'RG_A'") != std::string::npos) {
+			foundWarning = true;
+			break;
+		}
+	}
+	EXPECT_TRUE(foundWarning);
+}
+
+TEST(ValidateDeclarations, EnumValueNameCollisionAcrossEnumsWarns) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { SHARED }\n"
+		"enum Reward { SHARED }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 0u);
+	bool foundWarning = false;
+	for (const auto& d : diags) {
+		if (d.level == DiagnosticLevel::Warning &&
+			d.message.find("enum value 'SHARED' appears in multiple enums") != std::string::npos) {
+			foundWarning = true;
+			break;
+		}
+	}
+	EXPECT_TRUE(foundWarning);
+}

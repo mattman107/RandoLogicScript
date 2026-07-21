@@ -23,6 +23,7 @@ std::vector<ast::Diagnostic> collectDeclarations(ast::Project& project) {
 	project.ExtendRegionDecls.clear();
 	project.DefineDecls.clear();
 	project.ExternDefineDecls.clear();
+	project.EnumInfos.clear();
 
 	for (auto& file : project.files) {
 		for (auto& decl : file.declarations) {
@@ -62,6 +63,62 @@ std::vector<ast::Diagnostic> collectDeclarations(ast::Project& project) {
 					}
 					else {
 						project.ExternDefineDecls.emplace(d.name.text, &d);
+					}
+				}
+				else if constexpr (std::is_same_v<T, ast::EnumDecl>) {
+					auto [it, inserted] = project.EnumInfos.try_emplace(d.name.text);
+					if (!inserted) {
+						emitDuplicate("enum", d.name.text, it->second.span, d.span);
+					} else {
+						std::vector<ast::EnumEntryInfo> entries;
+						entries.reserve(d.members.size());
+						for (const auto& member : d.members) {
+							entries.emplace_back(ast::EnumMemberInfo{
+								member.name,
+								member.explicitValue,
+								member.span,
+							});
+						}
+
+						it->second = ast::EnumInfo(
+							d.name,
+							ast::EnumKind::Normal,
+							ast::Type::Int,
+							std::move(entries),
+							d.span);
+					}
+				}
+				else if constexpr (std::is_same_v<T, ast::ExternEnumDecl>) {
+					auto [it, inserted] = project.EnumInfos.try_emplace(d.name.text);
+					if (!inserted) {
+						emitDuplicate("enum", d.name.text, it->second.span, d.span);
+					} else {
+						std::vector<ast::EnumEntryInfo> entries;
+						entries.reserve(d.entries.size());
+
+						for (const auto& entry : d.entries) {
+							if (std::holds_alternative<ast::EnumMemberDecl>(entry)) {
+								const auto& member = std::get<ast::EnumMemberDecl>(entry);
+								entries.emplace_back(ast::EnumMemberInfo{
+									member.name,
+									member.explicitValue,
+									member.span,
+								});
+							} else {
+								const auto& pattern = std::get<ast::EnumPatternDecl>(entry);
+								entries.emplace_back(ast::EnumPatternInfo{
+									pattern.pattern,
+									pattern.span,
+								});
+							}
+						}
+
+						it->second = ast::EnumInfo(
+							d.name,
+							ast::EnumKind::Extern,
+							ast::Type::Int,
+							std::move(entries),
+							d.span);
 					}
 				}
 			}, decl);

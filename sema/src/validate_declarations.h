@@ -18,6 +18,9 @@ namespace rls::sema {
 ///   - define/extern define signatures must have valid parameter/default shapes
 ///   - extern define parameters must be typed (or inferred from defaults)
 ///     and extern define return types must be declared and valid
+///   - enum declarations must have unique member names and values
+///   - extern enum declarations must contain entries and report wildcard/member
+///     overlap and cross-enum value-name ambiguity warnings
 std::vector<ast::Diagnostic> validateDeclarations(ast::Project& project);
 
 } // namespace rls::sema
