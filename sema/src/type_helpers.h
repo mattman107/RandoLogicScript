@@ -82,6 +82,40 @@ inline std::optional<ast::Type> typeFromAnnotation(std::string_view annotation) 
 	return std::nullopt;
 }
 
+/// Simple glob pattern matcher supporting '*' wildcard.
+/// '*' matches zero or more characters.
+inline bool globMatches(std::string_view pattern, std::string_view value) {
+	size_t p = 0;
+	size_t v = 0;
+	size_t star = std::string_view::npos;
+	size_t backtrack = 0;
+
+	while (v < value.size()) {
+		if (p < pattern.size() && pattern[p] == value[v]) {
+			++p;
+			++v;
+			continue;
+		}
+		if (p < pattern.size() && pattern[p] == '*') {
+			star = p++;
+			backtrack = v;
+			continue;
+		}
+		if (star != std::string_view::npos) {
+			p = star + 1;
+			v = ++backtrack;
+			continue;
+		}
+		return false;
+	}
+
+	while (p < pattern.size() && pattern[p] == '*') {
+		++p;
+	}
+
+	return p == pattern.size();
+}
+
 /// Recursively walk an expression tree and collect the names of every
 /// function referenced by a CallExpr node.
 inline void collectCallNames(

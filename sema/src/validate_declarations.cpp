@@ -19,39 +19,6 @@ static const char* sectionKindName(ast::SectionKind kind) {
 	return "entry";
 }
 
-static bool globMatches(std::string_view pattern, std::string_view value) {
-	// Simple '*' wildcard matcher (matches zero or more chars).
-	size_t p = 0;
-	size_t v = 0;
-	size_t star = std::string_view::npos;
-	size_t backtrack = 0;
-
-	while (v < value.size()) {
-		if (p < pattern.size() && pattern[p] == value[v]) {
-			++p;
-			++v;
-			continue;
-		}
-		if (p < pattern.size() && pattern[p] == '*') {
-			star = p++;
-			backtrack = v;
-			continue;
-		}
-		if (star != std::string_view::npos) {
-			p = star + 1;
-			v = ++backtrack;
-			continue;
-		}
-		return false;
-	}
-
-	while (p < pattern.size() && pattern[p] == '*') {
-		++p;
-	}
-
-	return p == pattern.size();
-}
-
 static void checkEnumDeclarations(
 	ast::Project& project, std::vector<ast::Diagnostic>& diags)
 {

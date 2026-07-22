@@ -44,6 +44,79 @@ std::optional<ast::Type> typeFromIdentifier(std::string_view name) {
 	return std::nullopt;
 }
 
+// == Two-Stage Identifier Lookup (Stage A + B) ===============================
+
+/// Result of two-stage identifier lookup.
+struct IdentifierLookupResult {
+	std::optional<ast::Type> type;
+	std::optional<std::string> enumName; // Name of the enum if resolved
+	std::vector<std::string> ambiguousEnums; // If multiple enums claim the identifier
+};
+
+/// Two-stage identifier lookup:
+/// Stage A: Check if identifier matches any enum member (including glob patterns).
+/// Stage B: If no enum match, fall back to prefix-based builtin type lookup.
+/// Returns error info if multiple enums claim the identifier (ambiguity).
+static IdentifierLookupResult lookupIdentifierInEnums(
+	std::string_view name, const ast::Project& project) {
+	
+	std::vector<std::string> matchingEnums;
+
+	// Stage A: Check all user-defined and extern enums for exact member matches
+	for (const auto& [enumName, enumInfo] : project.EnumInfos) {
+		for (const auto& entry : enumInfo.entries) {
+			if (std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+				const auto& member = std::get<ast::EnumMemberInfo>(entry);
+				if (member.name.text == name) {
+					matchingEnums.push_back(enumName);
+					break; // Found a match in this enum, move to next enum
+				}
+			} else if (std::holds_alternative<ast::EnumPatternInfo>(entry)) {
+				const auto& pattern = std::get<ast::EnumPatternInfo>(entry);
+				if (globMatches(pattern.pattern, name)) {
+					matchingEnums.push_back(enumName);
+					break; // Found a match in this enum, move to next enum
+				}
+			}
+		}
+	}
+
+	// If multiple enums claim the identifier, report ambiguity
+	if (matchingEnums.size() > 1) {
+		return {
+			.type = std::nullopt,
+			.enumName = std::nullopt,
+			.ambiguousEnums = std::move(matchingEnums)
+		};
+	}
+
+	// If exactly one enum claims it, return that enum type
+	if (matchingEnums.size() == 1) {
+		return {
+			.type = ast::Type::Enum,
+			.enumName = std::move(matchingEnums[0]),
+			.ambiguousEnums = {}
+		};
+	}
+
+	// Stage B: Fall back to prefix-based builtin type lookup
+	auto builtinType = typeFromIdentifier(name);
+	if (builtinType) {
+		return {
+			.type = *builtinType,
+			.enumName = std::nullopt,
+			.ambiguousEnums = {}
+		};
+	}
+
+	// No match found anywhere
+	return {
+		.type = std::nullopt,
+		.enumName = std::nullopt,
+		.ambiguousEnums = {}
+	};
+}
+
 static bool isBuiltinEnumType(ast::Type type) {
 	switch (type) {
 	case ast::Type::Item:
@@ -205,13 +278,41 @@ struct ExprResolver {
 			return ast::Type::Condition;
 		}
 
-		if (auto t = typeFromIdentifier(node.name.text)) {
-			node.kind = ast::IdentifierKind::EnumValue;
-			if (isBuiltinEnumType(*t)) {
-				project.setEnumType(&expr, std::string(typeName(*t)));
+		// Two-stage identifier lookup: Stage A (enums) + Stage B (prefix map)
+		auto lookup = lookupIdentifierInEnums(node.name.text, project);
+
+		// Check for ambiguity (multiple enums claiming the same identifier)
+		if (!lookup.ambiguousEnums.empty()) {
+			std::string enumList;
+			for (size_t i = 0; i < lookup.ambiguousEnums.size(); ++i) {
+				if (i > 0) enumList += ", ";
+				enumList += lookup.ambiguousEnums[i];
 			}
-			return *t;
+			diags.push_back({
+				ast::DiagnosticLevel::Error,
+				std::format("ambiguous identifier '{}' found in multiple enums ({}); use EnumName.{} to disambiguate",
+					node.name.text, enumList, node.name.text),
+				expr.span
+			});
+			return ast::Type::Error;
 		}
+
+		// If found in an enum (Stage A match)
+		if (lookup.type && lookup.enumName) {
+			node.kind = ast::IdentifierKind::EnumValue;
+			project.setEnumType(&expr, *lookup.enumName);
+			return *lookup.type;
+		}
+
+		// If found via prefix map (Stage B fallback)
+		if (lookup.type) {
+			node.kind = ast::IdentifierKind::EnumValue;
+			if (isBuiltinEnumType(*lookup.type)) {
+				project.setEnumType(&expr, std::string(typeName(*lookup.type)));
+			}
+			return *lookup.type;
+		}
+
 		diags.push_back({
 			ast::DiagnosticLevel::Error,
 			std::format("unknown identifier '{}'", node.name.text),

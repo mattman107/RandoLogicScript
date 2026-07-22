@@ -32,9 +32,9 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Validate collisions between enum value names across enums are permitted but marked as potentially ambiguous for use-site resolution.
 
 **Phase 4 - Identifier And Expression Type Resolution**
-- [ ] Replace prefix-only typeFromIdentifier behavior with two-stage lookup.
-- [ ] Stage A: exact enum value match across collected enum registries (builtin + normal + extern expanded).
-- [ ] Stage B: fallback prefix map for legacy/builtin values if not otherwise resolved.
+- [x] Replace prefix-only typeFromIdentifier behavior with two-stage lookup.
+- [x] Stage A: exact enum value match across collected enum registries (builtin + normal + extern expanded).
+- [x] Stage B: fallback prefix map for legacy/builtin values if not otherwise resolved.
 - [ ] On bare identifier with multiple enum matches, emit hard error requiring EnumName.ValueName.
 - [ ] Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 - [ ] Add implicit conversion rules requested.
@@ -66,6 +66,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-06-25: Completed Phase 2 slice for enum/extern enum declarations (grammar + parse-tree selector + AST/builder wiring), added parser tests, and validated parser test suite.
 - 2026-06-26: Completed Phase 2 slice for dotted enum member-access parsing (`EnumName.ValueName`) with malformed-case parser tests and full-suite validation.
 - 2026-07-20: Completed Phase 3 collection/validation slice for enum declarations, enum value assignment checks, extern enum entry rules, and cross-enum ambiguity warnings.
+- 2026-07-21: Completed Phase 4 Stage A+B (two-stage identifier lookup): implemented Stage A exact enum member matching (including glob patterns for extern enums), Stage B prefix map fallback, and ambiguity detection with hard error reporting. Added 5 comprehensive tests validating all lookup paths. All 643 tests passing.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
@@ -90,9 +91,9 @@ E. Expand extern glob patterns against host enum registry (randomizer enum metad
 F. Validate collisions between enum value names across enums are permitted but marked as potentially ambiguous for use-site resolution.
 
 4. Phase 4 - Identifier And Expression Type Resolution (depends on 1 and 3)
-A. Replace prefix-only typeFromIdentifier behavior with two-stage lookup:
-B. Stage A: exact enum value match across collected enum registries (builtin + normal + extern expanded).
-C. Stage B: fallback prefix map for legacy/builtin values if not otherwise resolved.
+A. ✓ Replace prefix-only typeFromIdentifier behavior with two-stage lookup:
+B. ✓ Stage A: exact enum value match across collected enum registries (builtin + normal + extern expanded).
+C. ✓ Stage B: fallback prefix map for legacy/builtin values if not otherwise resolved.
 D. On bare identifier with multiple enum matches, emit hard error requiring EnumName.ValueName.
 E. Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 F. Add implicit conversion rules requested:

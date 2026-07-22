@@ -147,6 +147,97 @@ TEST(ResolveTypes, IdentifierUnknown) {
 	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Error);
 }
 
+// -- Two-Stage Lookup (Phase 4 Stage A + B) ==================================
+
+TEST(ResolveTypes, EnumIdentifierStageAUserEnum) {
+	// Stage A: User-defined enum member lookup
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED, GREEN, BLUE }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: RED }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Color");
+}
+
+TEST(ResolveTypes, EnumIdentifierStageAExternEnumPattern) {
+	// Stage A: Extern enum glob pattern member lookup
+	auto [project, diags] = resolveFromSource(
+		"extern enum Status { ST_ACTIVE, ST_* }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: ST_PENDING }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Status");
+}
+
+TEST(ResolveTypes, EnumIdentifierStageBAmbiguityError) {
+	// Multiple enums claim the same identifier -> error
+	auto [project, diags] = resolveFromSource(
+		"enum Alpha { SHARED_VALUE }\n"
+		"enum Beta { SHARED_VALUE }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: SHARED_VALUE }\n"
+		"}\n");
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("ambiguous identifier 'SHARED_VALUE'"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Alpha"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Beta"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("EnumName."), std::string::npos);
+}
+
+TEST(ResolveTypes, EnumIdentifierStageBFallbackPrefix) {
+	// Stage B: Fallback to prefix map when not in any enum
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: RG_HOOKSHOT }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Item);
+	// Builtin prefix should still resolve correctly
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Item");
+}
+
+TEST(ResolveTypes, EnumIdentifierPreferStageAOverStageB) {
+	// If identifier matches both an enum member and a prefix, enum takes precedence
+	auto [project, diags] = resolveFromSource(
+		"enum Item { RG_CUSTOM }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: RG_CUSTOM }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Item");  // Should resolve to user enum, not builtin
+}
+
 // -- Unary --------------------------------------------------------------------
 
 TEST(ResolveTypes, UnaryNotBool) {
