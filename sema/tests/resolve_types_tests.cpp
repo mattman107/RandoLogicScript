@@ -238,6 +238,88 @@ TEST(ResolveTypes, EnumIdentifierPreferStageAOverStageB) {
 	EXPECT_EQ(*enumType, "Item");  // Should resolve to user enum, not builtin
 }
 
+// -- MemberExpr Resolution (Phase 4 Task E) ==================================
+
+TEST(ResolveTypes, MemberExprResolvesUserEnumMember) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED, GREEN }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: Color.RED }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Color");
+}
+
+TEST(ResolveTypes, MemberExprResolvesExternPatternMember) {
+	auto [project, diags] = resolveFromSource(
+		"extern enum Status { ST_* }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: Status.ST_PENDING }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Status");
+}
+
+TEST(ResolveTypes, MemberExprUnknownEnumError) {
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: Unknown.RG_HOOKSHOT }\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("unknown enum 'Unknown' in member access"), std::string::npos);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Error);
+}
+
+TEST(ResolveTypes, MemberExprUnknownMemberError) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: Color.BLUE }\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("'BLUE' is not a member of enum 'Color'"), std::string::npos);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Error);
+}
+
+TEST(ResolveTypes, MemberExprBuiltinEnumMember) {
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: Item.RG_HOOKSHOT }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Item");
+}
+
 // -- Unary --------------------------------------------------------------------
 
 TEST(ResolveTypes, UnaryNotBool) {

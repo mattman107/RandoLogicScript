@@ -138,6 +138,32 @@ static bool isBuiltinEnumType(ast::Type type) {
 	}
 }
 
+static std::optional<ast::Type> builtinEnumTypeFromName(std::string_view enumName) {
+	auto type = typeFromAnnotation(enumName);
+	if (type.has_value() && isBuiltinEnumType(*type)) {
+		return type;
+	}
+	return std::nullopt;
+}
+
+static bool enumEntryMatchesName(const ast::EnumEntryInfo& entry, std::string_view valueName) {
+	if (std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+		return std::get<ast::EnumMemberInfo>(entry).name.text == valueName;
+	}
+
+	const auto& pattern = std::get<ast::EnumPatternInfo>(entry);
+	return globMatches(pattern.pattern, valueName);
+}
+
+static bool enumContainsValueName(const ast::EnumInfo& info, std::string_view valueName) {
+	for (const auto& entry : info.entries) {
+		if (enumEntryMatchesName(entry, valueName)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // == Step 4: Scope for parameters ============================================
 
 /// Maps parameter names to their types. nullopt = not yet inferred.
@@ -883,9 +909,40 @@ struct ExprResolver {
 	}
 
 	ast::Type resolve(const ast::MemberExpr& node, const ast::Expr& expr) {
-		// Phase 4 will implement full enum-aware member resolution.
-		// For now, return Type::Enum so the expression is well-typed and
-		// subsequent passes can look up the enum identity from the side-table.
+		if (const auto* enumInfo = project.getEnumInfo(node.object.text); enumInfo != nullptr) {
+			if (!enumContainsValueName(*enumInfo, node.member.text)) {
+				diags.push_back({
+					ast::DiagnosticLevel::Error,
+					std::format("'{}' is not a member of enum '{}'", node.member.text, node.object.text),
+					expr.span
+				});
+				return T::Error;
+			}
+
+			project.setEnumType(&expr, node.object.text);
+			return T::Enum;
+		}
+
+		const auto builtinEnumType = builtinEnumTypeFromName(node.object.text);
+		if (!builtinEnumType.has_value()) {
+			diags.push_back({
+				ast::DiagnosticLevel::Error,
+				std::format("unknown enum '{}' in member access", node.object.text),
+				expr.span
+			});
+			return T::Error;
+		}
+
+		auto memberType = typeFromIdentifier(node.member.text);
+		if (!memberType.has_value() || *memberType != *builtinEnumType) {
+			diags.push_back({
+				ast::DiagnosticLevel::Error,
+				std::format("'{}' is not a member of enum '{}'", node.member.text, node.object.text),
+				expr.span
+			});
+			return T::Error;
+		}
+
 		project.setEnumType(&expr, node.object.text);
 		return T::Enum;
 	}
