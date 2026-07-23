@@ -433,14 +433,29 @@ TEST(ResolveTypes, OrderingInts) {
 }
 
 TEST(ResolveTypes, OrderingNonInt) {
-	// RG_HOOKSHOT > RG_FAIRY_BOW  — Item is not Int.
+	// true > 1  — Bool is not Int-compatible.
 	auto [project, diags] = resolveFromSource(
 		"region RR_TEST {\n"
 		"    name: \"Test\"\n"
 		"    scene: SCENE_TEST\n"
-		"    locations { TEST_LOC: RG_HOOKSHOT > RG_FAIRY_BOW }\n"
+		"    locations { TEST_LOC: true > 1 }\n"
 		"}\n");
-	EXPECT_EQ(countErrors(diags), 2u); // both sides flagged
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("comparison requires Int operands"), std::string::npos);
+}
+
+TEST(ResolveTypes, OrderingEnumToIntImplicit_DistanceThresholdStyle) {
+	// can_get_drop-style threshold compare: distance <= ED_MASTER_SWORD_JUMPSLASH
+	auto [project, diags] = resolveFromSource(
+		"define can_get_drop(distance = ED_CLOSE):\n"
+		"    distance <= ED_MASTER_SWORD_JUMPSLASH\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: can_get_drop(ED_BOOMERANG) }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
 }
 
 // -- Arithmetic ---------------------------------------------------------------
@@ -467,6 +482,30 @@ TEST(ResolveTypes, ArithmeticNonInt) {
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("arithmetic requires Int"), std::string::npos);
+}
+
+TEST(ResolveTypes, ArithmeticEnumToIntImplicit_DistanceDeltaStyle) {
+	// Distance arithmetic still type-checks through enum -> int compatibility.
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: ED_HOOKSHOT + 1 }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Int);
+}
+
+TEST(ResolveTypes, EqualityEnumToIntImplicit_DistanceRankStyle) {
+	// distance_to_int-style equality path: enum-like and Int are comparable.
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: ED_MASTER_SWORD_JUMPSLASH == 2 }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
 }
 
 // -- Ternary ------------------------------------------------------------------
@@ -573,6 +612,18 @@ TEST(ResolveTypes, HostCallWrongArgType) {
 	EXPECT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("expected Item, got Enemy"), std::string::npos);
 	// Return type is still Bool.
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
+}
+
+TEST(ResolveTypes, HostCallIntParamAcceptsEnumImplicit_DistanceArgStyle) {
+	// Call binding case mirroring distance rank usage: Int param accepts Distance enum value.
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: keys(SCENE_TEST, ED_BOOMERANG) }\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
 	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
 }
 

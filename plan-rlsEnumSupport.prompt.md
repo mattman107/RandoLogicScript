@@ -38,7 +38,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [ ] On bare identifier with multiple enum matches, emit hard error requiring EnumName.ValueName.
 - [x] Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 - [ ] Add implicit conversion rules requested.
-- [ ] enum to int allowed in arithmetic/comparison/call binding.
+- [x] enum to int allowed in arithmetic/comparison/call binding.
 - [ ] int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
 - [ ] Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
 - [ ] Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
@@ -68,6 +68,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-20: Completed Phase 3 collection/validation slice for enum declarations, enum value assignment checks, extern enum entry rules, and cross-enum ambiguity warnings.
 - 2026-07-21: Completed Phase 4 Stage A+B (two-stage identifier lookup): implemented Stage A exact enum member matching (including glob patterns for extern enums), Stage B prefix map fallback, and ambiguity detection with hard error reporting. Added 5 comprehensive tests validating all lookup paths. All 643 tests passing.
 - 2026-07-21: Completed Phase 4 task E (`MemberExpr` semantic resolution): validate enum object name, validate member existence (including extern enum glob patterns), validate builtin enum member access by prefix/type, set enum identity, and emit hard errors for unknown enum/member. Added 5 resolve-types tests; full suite now 648/648 passing.
+- 2026-07-22: Completed Phase 4 task G (enum -> int implicit conversion): allow enum-like operands in arithmetic and ordering comparisons, allow enum-like/int equality comparisons, and allow enum-like arguments where `Int` parameters are expected in call binding. Added 4 conversion tests and updated 1 ordering negative test; full suite now 652/652 passing.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
@@ -98,7 +99,7 @@ C. ✓ Stage B: fallback prefix map for legacy/builtin values if not otherwise r
 D. On bare identifier with multiple enum matches, emit hard error requiring EnumName.ValueName.
 E. ✓ Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 F. Add implicit conversion rules requested:
-G. enum to int allowed in arithmetic/comparison/call binding.
+G. ✓ enum to int allowed in arithmetic/comparison/call binding.
 H. int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
 I. Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
 J. Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.

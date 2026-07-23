@@ -138,6 +138,14 @@ static bool isBuiltinEnumType(ast::Type type) {
 	}
 }
 
+static bool isEnumLikeType(ast::Type type) {
+	return type == ast::Type::Enum || isBuiltinEnumType(type);
+}
+
+static bool isIntCompatibleType(ast::Type type) {
+	return type == ast::Type::Int || isEnumLikeType(type);
+}
+
 static std::optional<ast::Type> builtinEnumTypeFromName(std::string_view enumName) {
 	auto type = typeFromAnnotation(enumName);
 	if (type.has_value() && isBuiltinEnumType(*type)) {
@@ -430,7 +438,9 @@ struct ExprResolver {
 		case ast::BinaryOp::Eq:
 		case ast::BinaryOp::NotEq:
 			if (leftType != T::Error && rightType != T::Error
-				&& leftType != rightType) {
+				&& leftType != rightType
+				&& !(leftType == T::Int && isEnumLikeType(rightType))
+				&& !(rightType == T::Int && isEnumLikeType(leftType))) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("comparison between incompatible types {} and {}",
@@ -445,7 +455,7 @@ struct ExprResolver {
 		case ast::BinaryOp::LtEq:
 		case ast::BinaryOp::Gt:
 		case ast::BinaryOp::GtEq:
-			if (leftType != T::Error && leftType != T::Int) {
+			if (leftType != T::Error && !isIntCompatibleType(leftType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("comparison requires Int operands, left is {}",
@@ -453,7 +463,7 @@ struct ExprResolver {
 					node.left->span
 				});
 			}
-			if (rightType != T::Error && rightType != T::Int) {
+			if (rightType != T::Error && !isIntCompatibleType(rightType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("comparison requires Int operands, right is {}",
@@ -468,7 +478,7 @@ struct ExprResolver {
 		case ast::BinaryOp::Sub:
 		case ast::BinaryOp::Mul:
 		case ast::BinaryOp::Div:
-			if (leftType != T::Error && leftType != T::Int) {
+			if (leftType != T::Error && !isIntCompatibleType(leftType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("arithmetic requires Int operands, left is {}",
@@ -476,7 +486,7 @@ struct ExprResolver {
 					node.left->span
 				});
 			}
-			if (rightType != T::Error && rightType != T::Int) {
+			if (rightType != T::Error && !isIntCompatibleType(rightType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("arithmetic requires Int operands, right is {}",
@@ -690,6 +700,9 @@ struct ExprResolver {
 			}
 			if (expected == T::Callable) {
 				return actual == T::Callable || actual == T::Condition || isBoolCompatible(actual);
+			}
+			if (expected == T::Int) {
+				return isIntCompatibleType(actual);
 			}
 			return actual == expected;
 		};
