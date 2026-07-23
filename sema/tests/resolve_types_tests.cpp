@@ -202,6 +202,23 @@ TEST(ResolveTypes, EnumIdentifierStageBAmbiguityError) {
 	EXPECT_NE(diags[0].message.find("EnumName."), std::string::npos);
 }
 
+TEST(ResolveTypes, EnumIdentifierStageBAmbiguityErrorWithPatternMatch) {
+	// Ambiguity also applies when one side is matched through an extern enum pattern.
+	auto [project, diags] = resolveFromSource(
+		"enum Alpha { SHARED_VALUE }\n"
+		"extern enum Beta { SHARED_* }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: SHARED_VALUE }\n"
+		"}\n");
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("ambiguous identifier 'SHARED_VALUE'"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Alpha"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Beta"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("EnumName.SHARED_VALUE"), std::string::npos);
+}
+
 TEST(ResolveTypes, EnumIdentifierStageBFallbackPrefix) {
 	// Stage B: Fallback to prefix map when not in any enum
 	auto [project, diags] = resolveFromSource(
@@ -256,6 +273,26 @@ TEST(ResolveTypes, MemberExprResolvesUserEnumMember) {
 	auto enumType = project.getEnumType(expr);
 	ASSERT_TRUE(enumType.has_value());
 	EXPECT_EQ(*enumType, "Color");
+}
+
+TEST(ResolveTypes, MemberExprDisambiguatesAmbiguousBareIdentifier) {
+	// Bare SHARED_VALUE would be ambiguous; explicit EnumName.ValueName must succeed.
+	auto [project, diags] = resolveFromSource(
+		"enum Alpha { SHARED_VALUE }\n"
+		"enum Beta { SHARED_VALUE }\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: Alpha.SHARED_VALUE }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	ASSERT_NE(expr, nullptr);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	auto enumType = project.getEnumType(expr);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Alpha");
 }
 
 TEST(ResolveTypes, MemberExprResolvesExternPatternMember) {
