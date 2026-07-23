@@ -664,6 +664,54 @@ TEST(ResolveTypes, HostCallIntParamAcceptsEnumImplicit_DistanceArgStyle) {
 	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
 }
 
+TEST(ResolveTypes, DefineCallEnumParamIdentityMatchOk) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED }\n"
+		"define takes_color(c: Enum = Color.RED):\n"
+		"    true\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: takes_color(Color.RED) }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
+}
+
+TEST(ResolveTypes, DefineCallEnumParamIdentityMismatchError) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED }\n"
+		"enum Fruit { RED }\n"
+		"define takes_color(c: Enum = Color.RED):\n"
+		"    true\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: takes_color(Fruit.RED) }\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("expected enum 'Color', got enum 'Fruit'"), std::string::npos);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
+}
+
+TEST(ResolveTypes, ExternCallEnumParamIdentityMismatchError) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED }\n"
+		"enum Fruit { RED }\n"
+		"extern define accepts_color(c: Enum = Color.RED) -> Bool\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: accepts_color(Fruit.RED) }\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("expected enum 'Color', got enum 'Fruit'"), std::string::npos);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
+}
+
 TEST(ResolveTypes, HostCallTooFewArgs) {
 	// has() — missing required arg.
 	auto [project, diags] = resolveFromSource(

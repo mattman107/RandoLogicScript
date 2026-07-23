@@ -40,7 +40,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [ ] Add implicit conversion rules requested.
 - [x] enum to int allowed in arithmetic/comparison/call binding.
 - [ ] int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
-- [ ] Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
+- [x] Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
 - [ ] Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
 
 **Phase 5 - Transpiler Integration**
@@ -70,6 +70,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-21: Completed Phase 4 task E (`MemberExpr` semantic resolution): validate enum object name, validate member existence (including extern enum glob patterns), validate builtin enum member access by prefix/type, set enum identity, and emit hard errors for unknown enum/member. Added 5 resolve-types tests; full suite now 648/648 passing.
 - 2026-07-22: Completed Phase 4 task G (enum -> int implicit conversion): allow enum-like operands in arithmetic and ordering comparisons, allow enum-like/int equality comparisons, and allow enum-like arguments where `Int` parameters are expected in call binding. Added 4 conversion tests and updated 1 ordering negative test; full suite now 652/652 passing.
 - 2026-07-22: Completed Phase 4 task D (bare identifier ambiguity hard error): validated hard error behavior for explicit+explicit and explicit+pattern enum collisions, and validated `EnumName.ValueName` disambiguation success path. Added 2 resolve-types tests; full suite now 654/654 passing.
+- 2026-07-22: Completed Phase 4 task I (enum identity enforcement in call binding): for enum-typed parameters with known identity, require same-enum arguments in both `define` and `extern define` calls; emit explicit mismatch diagnostics for cross-enum calls. Added 3 resolve-types tests; full suite now 657/657 passing.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
@@ -102,7 +103,7 @@ E. ✓ Resolve MemberExpr by validating left side as enum type and right side as
 F. Add implicit conversion rules requested:
 G. ✓ enum to int allowed in arithmetic/comparison/call binding.
 H. int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
-I. Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
+I. ✓ Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
 J. Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
 
 5. Phase 5 - Transpiler Integration (depends on 4)

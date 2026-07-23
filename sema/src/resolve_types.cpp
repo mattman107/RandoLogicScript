@@ -686,13 +686,14 @@ struct ExprResolver {
 		return result;
 	}
 
-	template <typename GetParamType>
+	template <typename GetParamType, typename GetParamEnumType>
 	void validateBoundArgTypes(
 		const std::string& function,
 		std::vector<T>& argTypes,
 		const ArgBindingResult& binding,
 		const ast::CallExpr& node,
-		GetParamType&& getParamType)
+		GetParamType&& getParamType,
+		GetParamEnumType&& getParamEnumType)
 	{
 		auto isCallArgCompatible = [](T expected, T actual) {
 			if (expected == T::Condition) {
@@ -720,6 +721,27 @@ struct ExprResolver {
 			}
 
 			if (argTypes[argIndex] == T::Error) continue;
+
+			// For Enum-typed parameters with known identity, require the same enum.
+			if (*paramType == T::Enum) {
+				auto expectedEnum = getParamEnumType(paramIndex);
+				if (expectedEnum.has_value() && argTypes[argIndex] == T::Enum) {
+					auto actualEnum = project.getEnumType(node.args[argIndex].value.get());
+					if (!actualEnum.has_value() || *actualEnum != *expectedEnum) {
+						diags.push_back({
+							ast::DiagnosticLevel::Error,
+							std::format("'{}' argument {} expected enum '{}', got enum '{}'",
+								function,
+								argIndex + 1,
+								*expectedEnum,
+								actualEnum.has_value() ? *actualEnum : std::string_view{"<unknown>"}),
+							node.args[argIndex].value->span
+						});
+						continue;
+					}
+				}
+			}
+
 			if (isCallArgCompatible(*paramType, argTypes[argIndex])) continue;
 
 			diags.push_back({
@@ -830,7 +852,8 @@ struct ExprResolver {
 				argTypes,
 				binding,
 				node,
-				[&](size_t i) { return resolveExternParamType(ext, i); });
+				[&](size_t i) { return resolveExternParamType(ext, i); },
+				[&](size_t i) { return project.getEnumType(&ext.params[i]); });
 
 			if (!binding.hasError) {
 				project.setResolvedCallArgs(
@@ -869,7 +892,8 @@ struct ExprResolver {
 				argTypes,
 				binding,
 				node,
-				[&](size_t i) { return project.getType(&def.params[i]); });
+				[&](size_t i) { return project.getType(&def.params[i]); },
+				[&](size_t i) { return project.getEnumType(&def.params[i]); });
 
 			if (!binding.hasError) {
 				project.setResolvedCallArgs(
@@ -1267,9 +1291,21 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			if (annotatedType) {
 				scope[param.name.text] = *annotatedType;
 				project.setType(&param, *annotatedType);
+				if (*annotatedType == ast::Type::Enum && param.defaultValue) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+					}
+				}
 			} else if (defaultType) {
 				scope[param.name.text] = *defaultType;
 				project.setType(&param, *defaultType);
+				if (*defaultType == ast::Type::Enum && param.defaultValue) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+					}
+				}
 			} else {
 				// No annotation, no default — type unknown
 				// until body-usage inference.
@@ -1323,8 +1359,20 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 
 			if (annotatedType) {
 				project.setType(&param, *annotatedType);
+				if (*annotatedType == ast::Type::Enum && param.defaultValue) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+					}
+				}
 			} else if (defaultType) {
 				project.setType(&param, *defaultType);
+				if (*defaultType == ast::Type::Enum && param.defaultValue) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+					}
+				}
 			}
 		}
 	}
