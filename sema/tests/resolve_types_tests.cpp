@@ -1445,6 +1445,48 @@ TEST(ResolveTypes, MatchPatternTypeMismatch) {
 		std::string::npos);
 }
 
+TEST(ResolveTypes, MatchPatternEnumIdentityMismatch) {
+	// match x { RED: true, APPLE: false } — Enum identity mismatch.
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED }\n"
+		"enum Fruit { APPLE }\n"
+		"define test_fn(x):\n"
+		"    match x {\n"
+		"        RED: true\n"
+		"        APPLE: false\n"
+		"    }\n");
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("match pattern 'APPLE' is enum 'Fruit' but expected enum 'Color'"),
+		std::string::npos);
+}
+
+TEST(ResolveTypes, MatchDiscriminantEnumIdentityMismatch) {
+	// Discriminant x defaults to Fruit.APPLE, but pattern is Color.RED.
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED }\n"
+		"enum Fruit { APPLE }\n"
+		"define test_fn(x = Fruit.APPLE):\n"
+		"    match x {\n"
+		"        RED: true\n"
+		"    }\n");
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("match discriminant 'x' is enum 'Fruit' but patterns are enum 'Color'"),
+		std::string::npos);
+}
+
+TEST(ResolveTypes, MatchPatternAmbiguousBareIdentifierError) {
+	// Bare SHARED is ambiguous across enums inside match patterns too.
+	auto [project, diags] = resolveFromSource(
+		"enum Alpha { SHARED }\n"
+		"enum Beta { SHARED }\n"
+		"define test_fn(x):\n"
+		"    match x {\n"
+		"        SHARED: true\n"
+		"    }\n");
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("ambiguous identifier 'SHARED'"), std::string::npos);
+}
+
 TEST(ResolveTypes, MatchMultiPatternArm) {
 	// match x { ED_CLOSE or ED_SHORT_JUMPSLASH: true }
 	auto [project, diags] = resolveFromSource(
