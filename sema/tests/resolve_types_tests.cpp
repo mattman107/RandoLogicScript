@@ -712,6 +712,55 @@ TEST(ResolveTypes, ExternCallEnumParamIdentityMismatchError) {
 	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
 }
 
+TEST(ResolveTypes, DefineCallIntToEnumWithExplicitContextOk) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED = 0, GREEN = 1 }\n"
+		"define takes_color(c: Enum = Color.RED):\n"
+		"    true\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: takes_color(1) }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
+}
+
+TEST(ResolveTypes, ExternCallIntToEnumWithExplicitContextOk) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED = 0, GREEN = 1 }\n"
+		"extern define accepts_color(c: Enum = Color.RED) -> Bool\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: accepts_color(1) }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
+}
+
+TEST(ResolveTypes, DefineCallIntToEnumAmbiguousWithoutContextError) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED = 0 }\n"
+		"enum Fruit { APPLE = 0 }\n"
+		"define takes_any_enum(c: Enum):\n"
+		"    true\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: takes_any_enum(0) }\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("ambiguous integer value 0"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Color"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Fruit"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("EnumName.ValueName"), std::string::npos);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
+}
+
 TEST(ResolveTypes, HostCallTooFewArgs) {
 	// has() — missing required arg.
 	auto [project, diags] = resolveFromSource(

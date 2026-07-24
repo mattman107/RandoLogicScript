@@ -39,7 +39,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 - [ ] Add implicit conversion rules requested.
 - [x] enum to int allowed in arithmetic/comparison/call binding.
-- [ ] int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
+- [x] int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
 - [x] Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
 - [ ] Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
 
@@ -71,6 +71,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-22: Completed Phase 4 task G (enum -> int implicit conversion): allow enum-like operands in arithmetic and ordering comparisons, allow enum-like/int equality comparisons, and allow enum-like arguments where `Int` parameters are expected in call binding. Added 4 conversion tests and updated 1 ordering negative test; full suite now 652/652 passing.
 - 2026-07-22: Completed Phase 4 task D (bare identifier ambiguity hard error): validated hard error behavior for explicit+explicit and explicit+pattern enum collisions, and validated `EnumName.ValueName` disambiguation success path. Added 2 resolve-types tests; full suite now 654/654 passing.
 - 2026-07-22: Completed Phase 4 task I (enum identity enforcement in call binding): for enum-typed parameters with known identity, require same-enum arguments in both `define` and `extern define` calls; emit explicit mismatch diagnostics for cross-enum calls. Added 3 resolve-types tests; full suite now 657/657 passing.
+- 2026-07-23: Completed Phase 4 task H (int -> enum conversion in enum-expected contexts): permit Int arguments for Enum parameters, use explicit enum context when available, and emit hard ambiguity errors for integer literals that map to multiple enum registries when no enum identity context is present. Added 3 resolve-types tests; full suite now 660/660 passing.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
@@ -102,7 +103,7 @@ D. ✓ On bare identifier with multiple enum matches, emit hard error requiring 
 E. ✓ Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 F. Add implicit conversion rules requested:
 G. ✓ enum to int allowed in arithmetic/comparison/call binding.
-H. int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
+H. ✓ int to enum allowed where enum expected; if multiple enum members share the integer value across candidate enums, require explicit enum context or MemberExpr.
 I. ✓ Update call argument compatibility so enum identity is enforced for enum-typed parameters (same enum required unless explicit int conversion path is taken).
 J. Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
 
@@ -173,6 +174,7 @@ C. Validate existing scripts still compile unchanged unless an intentional ambig
 1. Host registry contract should be frozen early (member name, integer value, C++ qualified type path) to prevent rework in Phase 5.
 2. If int to enum implicit conversion causes noisy ambiguity in practice, add a follow-up lint mode before changing language semantics.
 3. Introduce a compatibility flag only if existing scripts encounter unexpected ambiguity due to newly added user enums in shared projects.
+4. Consider upgrading type annotations so user-defined enum names are first-class annotation types (for example `c: Color`), instead of relying on generic `Enum` plus default-value identity hints.
 
 **It is imperative to use the VS Code CMake Tools extension for configuring, building, and running tests, otherwise the project may not compile due to bitness issues.**
 **Each step must be reviewed, be sure to take small steps to make it easier to review and commit.**

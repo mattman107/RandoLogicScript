@@ -172,6 +172,23 @@ static bool enumContainsValueName(const ast::EnumInfo& info, std::string_view va
 	return false;
 }
 
+static std::vector<std::string> enumNamesWithExplicitValue(const ast::Project& project, int value) {
+	std::vector<std::string> names;
+	for (const auto& [enumName, info] : project.EnumInfos) {
+		for (const auto& entry : info.entries) {
+			if (!std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+				continue;
+			}
+			const auto& member = std::get<ast::EnumMemberInfo>(entry);
+			if (member.value.has_value() && *member.value == value) {
+				names.push_back(enumName);
+				break;
+			}
+		}
+	}
+	return names;
+}
+
 // == Step 4: Scope for parameters ============================================
 
 /// Maps parameter names to their types. nullopt = not yet inferred.
@@ -725,6 +742,36 @@ struct ExprResolver {
 			// For Enum-typed parameters with known identity, require the same enum.
 			if (*paramType == T::Enum) {
 				auto expectedEnum = getParamEnumType(paramIndex);
+
+				// Explicit int-conversion path for enum parameters.
+				if (argTypes[argIndex] == T::Int) {
+					if (expectedEnum.has_value()) {
+						// Enum context is explicit via parameter identity.
+						continue;
+					}
+
+					if (const auto* intLiteral = std::get_if<ast::IntLiteral>(&node.args[argIndex].value->node)) {
+						auto candidateEnums = enumNamesWithExplicitValue(project, intLiteral->value);
+						if (candidateEnums.size() > 1) {
+							std::string enumList = candidateEnums.front();
+							for (size_t i = 1; i < candidateEnums.size(); ++i) {
+								enumList += ", ";
+								enumList += candidateEnums[i];
+							}
+							diags.push_back({
+								ast::DiagnosticLevel::Error,
+								std::format("'{}' argument {} uses ambiguous integer value {}; matching enums: {}; provide explicit enum context or EnumName.ValueName",
+									function, argIndex + 1, intLiteral->value, enumList),
+								node.args[argIndex].value->span
+							});
+							continue;
+						}
+					}
+
+					// Generic Enum target with Int source is allowed if not provably ambiguous.
+					continue;
+				}
+
 				if (expectedEnum.has_value() && argTypes[argIndex] == T::Enum) {
 					auto actualEnum = project.getEnumType(node.args[argIndex].value.get());
 					if (!actualEnum.has_value() || *actualEnum != *expectedEnum) {
