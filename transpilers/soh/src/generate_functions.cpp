@@ -6,6 +6,42 @@ using AT = rls::ast::Type;
 
 namespace rls::transpilers::soh {
 
+namespace {
+
+std::optional<std::string_view> builtinEnumCppType(std::string_view enumName) {
+    if (enumName == "Item") return "RandomizerGet";
+    if (enumName == "Enemy") return "RandomizerEnemy";
+    if (enumName == "Distance") return "EnemyDistance";
+    if (enumName == "Trick") return "RandomizerTrick";
+    if (enumName == "Setting") return "RandomizerSettingKey";
+    if (enumName == "Region") return "RandomizerRegion";
+    if (enumName == "Check") return "RandomizerCheck";
+    if (enumName == "Logic") return "LogicVal";
+    if (enumName == "Scene") return "SceneID";
+    if (enumName == "Dungeon") return "DungeonKey";
+    if (enumName == "Area") return "RandomizerArea";
+    if (enumName == "Trial") return "TrialKey";
+    if (enumName == "WaterLevel") return "RandoWaterLevel";
+    return std::nullopt;
+}
+
+template <typename T>
+std::string enumNodeType(const rls::ast::Project& p, const T* node) {
+    auto enumType = p.getEnumType(node);
+    if (!enumType.has_value()) {
+        return "unsupported_type";
+    }
+
+    if (auto builtinType = builtinEnumCppType(*enumType); builtinType.has_value()) {
+        return std::string(*builtinType);
+    }
+
+    // User/extern enums currently map directly to their enum name.
+    return std::string(*enumType);
+}
+
+} // namespace
+
 template <typename T>
 std::string nodeType(const rls::ast::Project& p, const T* node) {
     const auto type = p.getType(node);
@@ -31,6 +67,7 @@ std::string nodeType(const rls::ast::Project& p, const T* node) {
         case AT::Area: return "RandomizerArea";
         case AT::Trial: return "TrialKey";
         case AT::WaterLevel: return "RandoWaterLevel";
+        case AT::Enum: return enumNodeType(p, node);
         default: return "unsupported_type";
     }
 }

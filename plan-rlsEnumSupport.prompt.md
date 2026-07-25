@@ -46,7 +46,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 **Phase 5 - Transpiler Integration**
 - [x] Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
 - [ ] Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
-- [ ] Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
+- [x] Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 - [ ] Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
 
 **Phase 6 - Tests And Documentation**
@@ -74,6 +74,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-23: Completed Phase 4 task H (int -> enum conversion in enum-expected contexts): permit Int arguments for Enum parameters, use explicit enum context when available, and emit hard ambiguity errors for integer literals that map to multiple enum registries when no enum identity context is present. Added 3 resolve-types tests; full suite now 660/660 passing.
 - 2026-07-24: Completed Phase 4 task J (match enum identity unification): added enum-identity-aware match pattern/discriminant checks, ambiguous bare identifier behavior in patterns, and diagnostic display improvements for member patterns. Added 3 resolve-types tests and validated full suite at 663/663 passing.
 - 2026-07-24: Completed Phase 5 task A (SOH enum expression qualification): enum value identifiers now emit via enum identity metadata, `MemberExpr` emits qualified values, and builtin enum mappings are preserved (including current unqualified setting constants behavior). Added 3 SOH expression tests; full suite now 666/666 passing.
+- 2026-07-24: Completed Phase 5 task C (enum-typed function signatures): SOH function header/source generation now maps `Type::Enum` using enum identity metadata (`project.getEnumType`) and emits concrete C++ enum type names (builtin mapped names or user/extern enum names). Added 2 function-generation tests; full suite now 668/668 passing.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
@@ -112,7 +113,7 @@ J. ✓ Update match typing so discriminant/pattern unification supports enum ide
 5. Phase 5 - Transpiler Integration (depends on 4)
 A. ✓ Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
 B. Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
-C. Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
+C. ✓ Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 D. Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
 
 6. Phase 6 - Tests And Documentation (parallel with 3-5 once interfaces stabilize)
