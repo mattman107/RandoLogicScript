@@ -427,6 +427,25 @@ TEST(SohExpressions, CallExternDefineReorderedAndDefaultedArgs) {
 		"host_custom(RandomizerGet::RG_HOOKSHOT, EnemyDistance::ED_FAR, false) && host_custom(RandomizerGet::RG_FAIRY_BOW, EnemyDistance::ED_CLOSE, false)");
 }
 
+TEST(SohExpressions, CallEnumToIntEmitsStaticCast) {
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    keys(SCENE_SPIRIT_TEMPLE, ED_CLOSE)\n",
+		"test")),
+		"keys(SceneID::SCENE_SPIRIT_TEMPLE, static_cast<int>(EnemyDistance::ED_CLOSE))");
+}
+
+TEST(SohExpressions, CallIntToEnumEmitsStaticCast) {
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED = 0, GREEN = 1 }\n"
+		"define accepts_color(c: Enum = RED):\n"
+		"    true\n"
+		"define test():\n"
+		"    accepts_color(1)\n",
+		"test")),
+		"accepts_color(static_cast<Color>(1))");
+}
+
 TEST(SohExpressions, CallEnemyFunctions) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"define kill_fn(e: Enemy, distance = ED_CLOSE, wallOrFloor = true): always\n"

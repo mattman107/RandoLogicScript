@@ -43,6 +43,48 @@ std::optional<std::string_view> enumNameFromBuiltinType(rls::ast::Type type) {
     }
 }
 
+std::optional<std::string_view> builtinEnumCppType(std::string_view enumName) {
+    if (enumName == "Item") return "RandomizerGet";
+    if (enumName == "Enemy") return "RandomizerEnemy";
+    if (enumName == "Distance") return "EnemyDistance";
+    if (enumName == "Trick") return "RandomizerTrick";
+    if (enumName == "Setting") return "RandomizerSettingKey";
+    if (enumName == "Region") return "RandomizerRegion";
+    if (enumName == "Check") return "RandomizerCheck";
+    if (enumName == "Logic") return "LogicVal";
+    if (enumName == "Scene") return "SceneID";
+    if (enumName == "Dungeon") return "DungeonKey";
+    if (enumName == "Area") return "RandomizerArea";
+    if (enumName == "Trial") return "TrialKey";
+    if (enumName == "WaterLevel") return "RandoWaterLevel";
+    return std::nullopt;
+}
+
+std::optional<std::string> enumCppType(std::string_view enumName) {
+    if (auto builtinType = builtinEnumCppType(enumName); builtinType.has_value()) {
+        return std::string(*builtinType);
+    }
+    return std::string(enumName);
+}
+
+bool isEnumLikeType(rls::ast::Type type) {
+    using T = rls::ast::Type;
+    return type == T::Enum
+        || type == T::Item
+        || type == T::Enemy
+        || type == T::Distance
+        || type == T::Trick
+        || type == T::Setting
+        || type == T::Region
+        || type == T::Check
+        || type == T::Logic
+        || type == T::Scene
+        || type == T::Dungeon
+        || type == T::Area
+        || type == T::Trial
+        || type == T::WaterLevel;
+}
+
 std::string qualifyEnumValue(std::string_view enumName, std::string_view valueName) {
     if (enumName == "Setting") {
         // Keep existing unqualified setting constant behavior until registry-level
@@ -202,9 +244,35 @@ std::optional<rls::ast::Type> SohTranspiler::ResolveCallParamType(
     return std::nullopt;
 }
 
+std::optional<std::string> SohTranspiler::ResolveCallParamEnumCppType(
+    const rls::ast::CallExpr& node,
+    size_t index) const
+{
+    if (auto externIt = project.ExternDefineDecls.find(node.callee.text);
+        externIt != project.ExternDefineDecls.end() && index < externIt->second->params.size()) {
+        auto enumType = project.getEnumType(&externIt->second->params[index]);
+        if (enumType.has_value()) {
+            return enumCppType(*enumType);
+        }
+        return std::nullopt;
+    }
+
+    if (auto defineIt = project.DefineDecls.find(node.callee.text);
+        defineIt != project.DefineDecls.end() && index < defineIt->second->params.size()) {
+        auto enumType = project.getEnumType(&defineIt->second->params[index]);
+        if (enumType.has_value()) {
+            return enumCppType(*enumType);
+        }
+        return std::nullopt;
+    }
+
+    return std::nullopt;
+}
+
 std::string SohTranspiler::GenerateCallArgument(
     const rls::ast::Expr* argExpr,
-    std::optional<rls::ast::Type> paramType) const
+    std::optional<rls::ast::Type> paramType,
+    std::optional<std::string> paramEnumCppType) const
 {
     auto argType = project.getType(argExpr);
     bool passConditionByValue = paramType.has_value()
@@ -228,7 +296,30 @@ std::string SohTranspiler::GenerateCallArgument(
         return "[]{return " + GenerateExpression(argExpr->node) + ";}";
     }
 
-    return GenerateExpression(argExpr->node);
+    const auto argCode = GenerateExpression(argExpr->node);
+    if (!paramType.has_value() || !argType.has_value()) {
+        return argCode;
+    }
+
+    if (paramType.value() == rls::ast::Type::Int && isEnumLikeType(argType.value())) {
+        return "static_cast<int>(" + argCode + ")";
+    }
+
+    if (isEnumLikeType(paramType.value()) && argType.value() == rls::ast::Type::Int) {
+        auto targetCppType = paramEnumCppType;
+        if (!targetCppType.has_value() && paramType.value() != rls::ast::Type::Enum) {
+            auto enumName = enumNameFromBuiltinType(paramType.value());
+            if (enumName.has_value()) {
+                targetCppType = enumCppType(*enumName);
+            }
+        }
+
+        if (targetCppType.has_value()) {
+            return "static_cast<" + *targetCppType + ">(" + argCode + ")";
+        }
+    }
+
+    return argCode;
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::CallExpr& node) const {
@@ -248,7 +339,8 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::CallExpr& node) co
         }
 
         auto paramType = ResolveCallParamType(node, i);
-        oss << GenerateCallArgument(resolved[i], paramType);
+        auto paramEnumCppType = ResolveCallParamEnumCppType(node, i);
+        oss << GenerateCallArgument(resolved[i], paramType, paramEnumCppType);
     }
     oss << ")";
     return oss.str();
