@@ -25,6 +25,32 @@ std::optional<std::string_view> builtinEnumCppType(std::string_view enumName) {
     return std::nullopt;
 }
 
+void writeEnumDeclarations(std::ostream& out, const rls::ast::Project& project) {
+    for (const auto& [enumName, info] : project.EnumInfos) {
+        if (info.kind != rls::ast::EnumKind::Normal) {
+            continue;
+        }
+
+        out << "enum class " << enumName << " : int {\n";
+        for (size_t i = 0; i < info.entries.size(); ++i) {
+            const auto& entry = info.entries[i];
+            if (!std::holds_alternative<rls::ast::EnumMemberInfo>(entry)) {
+                continue;
+            }
+
+            const auto& member = std::get<rls::ast::EnumMemberInfo>(entry);
+            if (i > 0) {
+                out << ",\n";
+            }
+            out << "    " << member.name.text;
+            if (member.value.has_value()) {
+                out << " = " << *member.value;
+            }
+        }
+        out << "\n};\n";
+    }
+}
+
 template <typename T>
 std::string enumNodeType(const rls::ast::Project& p, const T* node) {
     auto enumType = p.getEnumType(node);
@@ -105,6 +131,11 @@ void SohTranspiler::GenerateFunctionDefinitionsHeader(rls::OutputWriter& out) co
            << "#include \"rls_match.h\"\n"
            << "#include \"rls_host.h\"\n"
            << "\n";
+
+    writeEnumDeclarations(header, project);
+    if (!project.EnumInfos.empty()) {
+        header << "\n";
+    }
 
     for (const auto& [name, decl] : project.DefineDecls) {
         header << functionSignature(*this, project, decl, true) << ";\n";
