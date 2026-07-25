@@ -106,6 +106,43 @@ TEST(SohExpressions, Identifier) {
 		"item");
 }
 
+TEST(SohExpressions, EnumIdentifierUsesEnumMetadataNamespace) {
+	auto expr = sourceToExpression(
+		"enum Color { RED }\n"
+		"define test():\n"
+		"    RED\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"Color::RED");
+}
+
+TEST(SohExpressions, ExternEnumIdentifierUsesEnumMetadataNamespace) {
+	auto expr = sourceToExpression(
+		"extern enum Status { ST_ACTIVE }\n"
+		"define test():\n"
+		"    ST_ACTIVE\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"Status::ST_ACTIVE");
+}
+
+TEST(SohExpressions, MemberExprUsesQualifiedEnumNamespace) {
+	auto expr = sourceToExpression(
+		"enum Color { RED }\n"
+		"define test():\n"
+		"    Color.RED\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"Color::RED");
+
+	expr = sourceToExpression(
+		"define test():\n"
+		"    Item.RG_HOOKSHOT\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"RandomizerGet::RG_HOOKSHOT");
+}
+
 TEST(SohExpressions, UnaryNot) {
 	auto expr = sourceToExpression(
 		"define test(value: Bool):\n"

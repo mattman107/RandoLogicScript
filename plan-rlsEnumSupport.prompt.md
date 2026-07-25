@@ -44,7 +44,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
 
 **Phase 5 - Transpiler Integration**
-- [ ] Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
+- [x] Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
 - [ ] Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
 - [ ] Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 - [ ] Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
@@ -73,6 +73,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-22: Completed Phase 4 task I (enum identity enforcement in call binding): for enum-typed parameters with known identity, require same-enum arguments in both `define` and `extern define` calls; emit explicit mismatch diagnostics for cross-enum calls. Added 3 resolve-types tests; full suite now 657/657 passing.
 - 2026-07-23: Completed Phase 4 task H (int -> enum conversion in enum-expected contexts): permit Int arguments for Enum parameters, use explicit enum context when available, and emit hard ambiguity errors for integer literals that map to multiple enum registries when no enum identity context is present. Added 3 resolve-types tests; full suite now 660/660 passing.
 - 2026-07-24: Completed Phase 4 task J (match enum identity unification): added enum-identity-aware match pattern/discriminant checks, ambiguous bare identifier behavior in patterns, and diagnostic display improvements for member patterns. Added 3 resolve-types tests and validated full suite at 663/663 passing.
+- 2026-07-24: Completed Phase 5 task A (SOH enum expression qualification): enum value identifiers now emit via enum identity metadata, `MemberExpr` emits qualified values, and builtin enum mappings are preserved (including current unqualified setting constants behavior). Added 3 SOH expression tests; full suite now 666/666 passing.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
@@ -109,7 +110,7 @@ I. ✓ Update call argument compatibility so enum identity is enforced for enum-
 J. ✓ Update match typing so discriminant/pattern unification supports enum identities and detects ambiguous bare values.
 
 5. Phase 5 - Transpiler Integration (depends on 4)
-A. Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
+A. ✓ Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
 B. Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
 C. Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 D. Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.

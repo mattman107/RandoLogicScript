@@ -6,6 +6,59 @@
 
 namespace rls::transpilers::soh {
 
+namespace {
+
+std::optional<std::string_view> builtinEnumNamespace(std::string_view enumName) {
+    if (enumName == "Item") return "RandomizerGet";
+    if (enumName == "Enemy") return "RandomizerEnemy";
+    if (enumName == "Distance") return "EnemyDistance";
+    if (enumName == "Trick") return "RandomizerTrick";
+    if (enumName == "Region") return "RandomizerRegion";
+    if (enumName == "Check") return "RandomizerCheck";
+    if (enumName == "Logic") return "LogicVal";
+    if (enumName == "Scene") return "SceneID";
+    if (enumName == "Dungeon") return "DungeonKey";
+    if (enumName == "Area") return "RandomizerArea";
+    if (enumName == "Trial") return "TrialKey";
+    if (enumName == "WaterLevel") return "RandoWaterLevel";
+    return std::nullopt;
+}
+
+std::optional<std::string_view> enumNameFromBuiltinType(rls::ast::Type type) {
+    switch (type) {
+    case rls::ast::Type::Item: return "Item";
+    case rls::ast::Type::Enemy: return "Enemy";
+    case rls::ast::Type::Distance: return "Distance";
+    case rls::ast::Type::Trick: return "Trick";
+    case rls::ast::Type::Setting: return "Setting";
+    case rls::ast::Type::Region: return "Region";
+    case rls::ast::Type::Check: return "Check";
+    case rls::ast::Type::Logic: return "Logic";
+    case rls::ast::Type::Scene: return "Scene";
+    case rls::ast::Type::Dungeon: return "Dungeon";
+    case rls::ast::Type::Area: return "Area";
+    case rls::ast::Type::Trial: return "Trial";
+    case rls::ast::Type::WaterLevel: return "WaterLevel";
+    default: return std::nullopt;
+    }
+}
+
+std::string qualifyEnumValue(std::string_view enumName, std::string_view valueName) {
+    if (enumName == "Setting") {
+        // Keep existing unqualified setting constant behavior until registry-level
+        // RO_/RSK_ namespace mapping is available.
+        return std::string(valueName);
+    }
+
+    if (auto ns = builtinEnumNamespace(enumName); ns.has_value()) {
+        return std::string(*ns) + "::" + std::string(valueName);
+    }
+
+    return std::string(enumName) + "::" + std::string(valueName);
+}
+
+} // namespace
+
 std::string SohTranspiler::GenerateExpression(const rls::ast::BoolLiteral& node) const {
 	return node.value ? "true" : "false";
 }
@@ -16,29 +69,19 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::IntLiteral& node) 
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::Identifier& node) const {
     if (node.kind == rls::ast::IdentifierKind::EnumValue) {
+        if (auto enumName = project.getEnumType(&node); enumName.has_value()) {
+            return qualifyEnumValue(*enumName, node.name.text);
+        }
+
+        // Fallback for any legacy enum value sites where enum identity wasn't recorded.
         auto type = project.getType(&node);
-        if (!type.has_value()) {
-            return node.name.text;
+        if (type.has_value()) {
+            if (auto fallbackEnum = enumNameFromBuiltinType(*type); fallbackEnum.has_value()) {
+                return qualifyEnumValue(*fallbackEnum, node.name.text);
+            }
         }
-        switch (type.value()) {
-            case rls::ast::Type::Item: return "RandomizerGet::" + node.name.text;
-            case rls::ast::Type::Enemy: return "RandomizerEnemy::" + node.name.text;
-            case rls::ast::Type::Distance: return "EnemyDistance::" + node.name.text;
-            case rls::ast::Type::Trick: return "RandomizerTrick::" + node.name.text;
-            // We current map RSK_ and RO_ settings to a single enum, but SOH has 1 RSK_ enum about 55 RO_ enums,
-            // so we can't map to one type and back out to the correct prefix without losing information.
-            // This is a gap we'll have to address. For now, C++ accepts the unqualified name which we'll take advantage of..
-            //case rls::ast::Type::Setting: return "RandomizerSettingKey::" + node.name.text;
-            case rls::ast::Type::Region: return "RandomizerRegion::" + node.name.text;
-            case rls::ast::Type::Check: return "RandomizerCheck::" + node.name.text;
-            case rls::ast::Type::Logic: return "LogicVal::" + node.name.text;
-            case rls::ast::Type::Scene: return "SceneID::" + node.name.text;
-            case rls::ast::Type::Dungeon: return "DungeonKey::" + node.name.text;
-            case rls::ast::Type::Area: return "RandomizerArea::" + node.name.text;
-            case rls::ast::Type::Trial: return "TrialKey::" + node.name.text;
-            case rls::ast::Type::WaterLevel: return "RandoWaterLevel::" + node.name.text;
-            default: return node.name.text;
-        }
+
+        return node.name.text;
     } else if (node.kind == rls::ast::IdentifierKind::Parameter) {
         return node.name.text;
     } else if (node.kind == rls::ast::IdentifierKind::FunctionRef) {
@@ -216,9 +259,7 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::InvokeExpr& node) 
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::MemberExpr& node) const {
-	// Phase 5 will resolve the enum namespace from registry metadata.
-	// For now emit the member name unqualified so existing C++ enum lookup still works.
-	return node.member.text;
+    return qualifyEnumValue(node.object.text, node.member.text);
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::HereRef& node) const {
