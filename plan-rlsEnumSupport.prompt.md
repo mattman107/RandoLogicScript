@@ -55,7 +55,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Sema tests: duplicate enum declarations, member value assignment auto-increment, wildcard expansion, ambiguity diagnostics, enum/int implicit conversions, dot disambiguation success paths.
 - [x] AST tests: new declaration variants, enum identity table storage/retrieval, member expression node construction.
 - [x] Transpiler tests: generated C++ for bare and dotted enum values, enum params, conversion-heavy expressions.
-- [ ] Docs updates: language spec sections on core types, type inference, enum declarations, extern wildcards, ambiguity rules, and conversion semantics.
+- [x] Docs updates: language spec sections on core types, type inference, enum declarations, extern wildcards, ambiguity rules, and conversion semantics.
 
 **Phase 7 - Verification And Rollout**
 - [x] Run parser, sema, ast, and soh transpiler test suites.
@@ -79,6 +79,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-24: Completed Phase 5 task D (explicit cast emission for conversions): call argument generation now emits `static_cast<int>(...)` for enum-to-int arguments and `static_cast<EnumType>(...)` for int-to-enum arguments where enum context exists. Added 2 SOH expression tests; full suite now 670/670 passing.
 - 2026-07-24: Completed Phase 5 task E (normal enum declaration emission): SOH function headers now emit scoped C++ enum definitions for normal RLS enums before function declarations, preserving explicit numeric values. Added 1 function-generation test; full suite now 671/671 passing.
 - 2026-07-24: Completed Phase 6 test checklist items A-D. Added AST coverage for member-expression node construction and enum/extern-enum declaration variants. Validated full suite at 674/674 passing.
+- 2026-07-24: Completed Phase 6 task E (docs updates): updated language docs to cover core `Enum` type behavior, two-stage enum resolution, enum/extern enum declarations, wildcard entries, ambiguity disambiguation via `EnumName.ValueName`, and enum/int conversion semantics.
 - 2026-07-24: Completed Phase 7 task A (verification run): executed full parser, sema, ast, and SOH transpiler suites via CTest with all tests passing (674/674).
 
 **Steps**

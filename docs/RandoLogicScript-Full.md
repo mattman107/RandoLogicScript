@@ -72,7 +72,7 @@ Since the language is transpiled (never interpreted at runtime), the syntax is f
 
 ### 3.1 File Structure
 
-Each `.rls` file contains any combination of top-level declarations - `region`, `extend region`, `define`, and `extern define`. A file typically corresponds to one dungeon or overworld area, but can also be a pure library (e.g. `stdlib/enemies.rls` containing only enemy helper `define` functions).
+Each `.rls` file contains any combination of top-level declarations - `region`, `extend region`, `define`, `extern define`, `enum`, and `extern enum`. A file typically corresponds to one dungeon or overworld area, but can also be a pure library (e.g. `stdlib/enemies.rls` containing only enemy helper `define` functions).
 
 The transpiler processes all `.rls` files in the project together. All top-level declarations are globally visible - there is no `import` mechanism. The transpiler derives dependencies from usage during semantic analysis.
 
@@ -108,6 +108,7 @@ extend region RR_SPIRIT_TEMPLE_FOYER {
 | `Area`       | `RA_CASTLE_GROUNDS`, `RA_HYRULE_FIELD`                                              | Maps to `RA_*` enum. Used in region `areas` property. |
 | `Trial`      | `TK_LIGHT_TRIAL`, `TK_FOREST_TRIAL`                                                 | Maps to `TK_*` enum. Used with `trial_skipped()`.     |
 | `WaterLevel` | `WL_HIGH`, `WL_LOW`, `WL_MID`                                                       | Maps to `WL_*` enum. Used with `water_level()`.       |
+| `Enum`       | `Color.RED`, `Status.ST_ACTIVE`, `EnemyDistance.ED_CLOSE`                           | User/extern enum values with enum identity tracking.   |
 
 All names use the **same identifiers as the C++ enums**. This eliminates a mapping layer, makes cross-referencing trivial, and allows the transpiler to emit enum values directly. Names are validated at transpile time against the enum registry generated from `randomizerEnums.h`.
 
@@ -115,7 +116,7 @@ All names use the **same identifiers as the C++ enums**. This eliminates a mappi
 
 RLS does not require type annotations in most cases - the transpiler infers types at transpile time from context:
 
-1. **Enum identifiers are self-typing.** Every enum prefix maps to a unique type: `RG_*` → `Item`, `RE_*` → `Enemy`, `ED_*` → `Distance`, `RT_*` → `Trick`, `RSK_*`/`RO_*` → `Setting`, etc. The transpiler resolves the type from the enum registry. Passing `has(RE_ARMOS)` is a type error - `RE_ARMOS` is an `Enemy`, not an `Item`.
+1. **Enum identifiers are resolved in two stages.** Stage A resolves known enum members from builtin enums, normal enums, and extern enums (including wildcard-pattern matches). Stage B falls back to legacy prefix-based typing when Stage A has no match. If a bare identifier matches multiple enums, this is a hard error and requires dotted disambiguation (`EnumName.ValueName`).
 
 2. **Host-call signatures are declared with `extern define`.** For example, `extern define has(item: Item) -> bool`, `extern define keys(scene: Scene, n: int) -> int`, and `extern define trick(key: Trick) -> bool`. The transpiler validates arguments against these declared signatures.
 
@@ -124,6 +125,36 @@ RLS does not require type annotations in most cases - the transpiler infers type
 4. **`define` parameters are inferred from usage.** If you write `define foo(d): can_hit_switch(d)` and `can_hit_switch` expects a `Distance` first argument, the transpiler infers `d: Distance`. If a call site passes `foo(RG_HOOKSHOT)`, that's a type error.
 
 5. **Literals and booleans.** Number literals are `int`. `true`/`false` (and their aliases `always`/`never`) are `bool`. `and`/`or`/`not` produce `bool`. Condition expressions in `locations`/`exits`/`events` must be `bool`. Integers have an implicit conversion to `bool` - zero is `false`, non-zero is `true` - so functions returning a count can be used directly in conditions.
+
+6. **Enum/int implicit conversion is context-aware.**
+   - `enum -> int` is allowed in arithmetic, comparison, and call binding where `int` is expected.
+   - `int -> enum` is allowed where an enum is expected (for example, a typed parameter).
+   - If an integer literal could map to multiple enum identities and there is no explicit enum context, this is a hard ambiguity error requiring explicit disambiguation.
+
+7. **Enum identity is enforced for enum-typed parameters.** Two enum-typed values must belong to the same enum identity when binding enum parameters, unless an explicit `int` conversion path is used.
+
+### 3.4 Enum Declarations And Resolution
+
+RLS supports two enum declaration forms:
+
+```rls
+enum Color {
+    RED,
+    GREEN = 3,
+    BLUE
+}
+
+extern enum Item {
+    RG_HOOKSHOT,
+    RG_*,
+    *_KEY
+}
+```
+
+- `enum` declares project-owned enums. Members can omit values (auto-increment) or specify explicit integer values.
+- `extern enum` declares host-owned enums. Entries can be explicit members or wildcard patterns (`*` globs).
+- Bare identifiers remain valid when unique. When ambiguous across multiple enums, use dotted syntax: `EnumName.ValueName`.
+- Dotted member expressions always resolve against the named enum and bypass bare-name ambiguity.
 
 Optional type annotations are available for documentation or when inference is ambiguous (e.g. a parameter only used in arithmetic):
 
@@ -168,6 +199,34 @@ can_jumpslash()                               # logic->CanJumpslash()
 ```
 
 **Operators:** `and`, `or`, `not`, parentheses. Comparisons: `==`, `!=`, `>=`, `<=`, `>`, `<` (with word aliases `is` for `==` and `is not` for `!=`). Arithmetic: `+`, `-`, `*`, `/`. Ternary: `? :`.
+
+#### Enum Declarations, Wildcards, And Dotted Access
+
+Enum disambiguation syntax is explicit:
+
+```rls
+enum Color { RED = 0, BLUE = 1 }
+enum Alert { RED = 0 }
+
+define is_red_alert(value = Alert.RED):
+    value is Alert.RED
+```
+
+Extern enums can include wildcard patterns that are matched against host enum names:
+
+```rls
+extern enum Item {
+    RG_HOOKSHOT,
+    RG_*,
+    *_KEY,
+    R*_BOSS
+}
+```
+
+Rules:
+- Ambiguous bare enum values are rejected with a hard error requiring `EnumName.ValueName`.
+- Member access uses `EnumName.ValueName` and resolves against that enum's identity.
+- Wildcard entries are valid only in `extern enum` declarations.
 
 The word operators `and`/`or`/`not`/`is`/`is not` are used instead of `&&`/`||`/`!`/`==`/`!=` for readability. The symbolic forms remain valid for arithmetic comparisons where word operators would feel unnatural (e.g. `fire_timer() >= 48`).
 
@@ -780,7 +839,7 @@ The transpiler bridges these differences:
 ## 7. Grammar (EBNF Sketch)
 
 ```ebnf
-file          = (region | extend | define | extern_define)* ;
+file          = (region | extend | define | extern_define | enum_decl | extern_enum_decl)* ;
 
 region        = "region" IDENT "{" region_body "}" ;
 extend        = "extend" "region" IDENT "{" section* "}" ;
@@ -800,6 +859,14 @@ entry         = IDENT ":" expr ;
 define        = "define" IDENT "(" params? ")" ":" expr ;
 extern_define = "extern" "define" IDENT "(" params? ")" "->" type ;
 
+enum_decl        = "enum" IDENT "{" enum_member_list? "}" ;
+enum_member_list = enum_member ("," enum_member)* ","? ;
+enum_member      = IDENT ("=" NUMBER)? ;
+
+extern_enum_decl   = "extern" "enum" IDENT "{" extern_enum_entry_list? "}" ;
+extern_enum_entry_list = extern_enum_entry ("," extern_enum_entry)* ","? ;
+extern_enum_entry  = IDENT ("=" NUMBER)? | GLOB_PATTERN ;
+
 params        = param ("," param)* ;
 param         = IDENT (":" type)? ("=" expr)? ;
 
@@ -812,11 +879,13 @@ comp_op       = "==" | "is" | "!=" | "is" "not" | ">=" | "<=" | ">" | "<" ;
 add_sub       = mul_div (("+" | "-") mul_div)* ;
 mul_div       = unary (("*" | "/") unary)* ;
 unary         = "not" unary | primary ;
-primary       = call | match_expr | atom | "(" expr ")" ;
+primary       = call | match_expr | member_expr | atom | "(" expr ")" ;
+
+member_expr   = IDENT "." IDENT ;
 
 match_expr    = "match" IDENT "{" match_arm+ "}" ;
 match_arm     = match_pattern ":" expr trailing_or? ;
-match_pattern = IDENT ("or" IDENT)* ;
+match_pattern = "_" | IDENT ("or" IDENT)* ;
 trailing_or   = "or" ;  /* fallthrough: OR-accumulate with next arm */
 
 call          = IDENT "(" (arg ("," arg)*)? ")" ;
@@ -827,6 +896,7 @@ atom          = "always" | "never"
               | IDENT | NUMBER ;
 
 IDENT         = [A-Za-z_] [A-Za-z0-9_]* ;
+GLOB_PATTERN  = [A-Za-z0-9_*]+ ;
 NUMBER        = [0-9]+ ;
 ident_list    = IDENT ("," IDENT)* ;
 type          = IDENT ;
@@ -836,7 +906,7 @@ Key differences from the existing `LogicExpression` parser:
 - `and`/`or`/`not` keywords instead of `&&`/`||`/`!`. `is`/`is not` as aliases for `==`/`!=`.
 - `always`/`never` as keywords.
 - `match <value> { ... }` expressions with trailing `or` for fallthrough accumulation.
-- File-level structure (`region`, `extend`, `define`, `extern define`).
+- File-level structure (`region`, `extend`, `define`, `extern define`, `enum`, `extern enum`).
 
 ---
 
@@ -852,6 +922,8 @@ Since logic errors can cause softlocks in generated seeds, RLS prioritizes error
 | **Unused define**        | `define foo(): ...` never referenced | `warning: 'foo' is defined but never used.`                                                                                                                            |
 | **Unknown function**     | `can_fly()`                          | `error: unknown function 'can_fly'. Available: can_use, can_kill, ...`                                                                                                 |
 | **Duplicate entry**      | Same check in same region twice      | `error: duplicate location 'RC_SPIRIT_TEMPLE_LOBBY_POT_1' in region 'RR_SPIRIT_TEMPLE_FOYER'.` (Note: the same location in *different* regions is allowed - see §4.3.) |
+| **Ambiguous enum value** | `SHARED_VALUE` exists in two enums   | `error: ambiguous identifier 'SHARED_VALUE'. Use EnumName.ValueName (for example, Color.SHARED_VALUE).`                                                                |
+| **Enum identity mismatch** | Passing `Distance` where `Scene` is expected | `error: enum argument type mismatch: expected 'Scene', got 'Distance'.`                                                                                          |
 
 ---
 

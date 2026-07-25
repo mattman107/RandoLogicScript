@@ -97,6 +97,22 @@ Conditions are boolean expressions using short function names that the transpile
 
 ---
 
+## Enums And Disambiguation
+
+RLS supports both project-owned enums and host-owned enum references:
+
+```RLS
+enum Color { RED, GREEN = 3 }
+extern enum Item { RG_HOOKSHOT, RG_*, *_KEY }
+```
+
+- Use bare enum values when they are unique.
+- If a value name is ambiguous across enums, use dotted form: `EnumName.ValueName`.
+- `extern enum` supports wildcard entries (`*` globs) for host registries.
+- `enum -> int` and `int -> enum` conversions are supported in typed contexts.
+
+---
+
 ## Functions (`define`)
 
 Reusable logic is defined at file scope. Functions are pure (no side effects).
