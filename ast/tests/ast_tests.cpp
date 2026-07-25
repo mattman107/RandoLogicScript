@@ -30,6 +30,14 @@ TEST(ExprTests, Identifier) {
 	EXPECT_EQ(std::get<Identifier>(expr->node).name, "RG_HOOKSHOT");
 }
 
+TEST(ExprTests, MemberExpr) {
+	auto expr = makeExpr(MemberExpr(Name("Color"), Name("RED")));
+	ASSERT_TRUE(std::holds_alternative<MemberExpr>(expr->node));
+	const auto& member = std::get<MemberExpr>(expr->node);
+	EXPECT_EQ(member.object, "Color");
+	EXPECT_EQ(member.member, "RED");
+}
+
 // == Compound expression nodes ================================================
 
 TEST(ExprTests, UnaryNot) {
@@ -373,6 +381,37 @@ TEST(DeclTests, ExternDefineDecl) {
 	EXPECT_TRUE(std::holds_alternative<Identifier>(ext.params[0].defaultValue->node));
 	ASSERT_NE(ext.params[1].defaultValue, nullptr);
 	EXPECT_TRUE(std::holds_alternative<BoolLiteral>(ext.params[1].defaultValue->node));
+}
+
+TEST(DeclTests, EnumDecl) {
+	std::vector<EnumMemberDecl> members;
+	members.emplace_back(Name("RED"));
+	members.emplace_back(Name("GREEN"), 3);
+
+	EnumDecl decl(Name("Color"), std::move(members));
+
+	EXPECT_EQ(decl.name, "Color");
+	ASSERT_EQ(decl.members.size(), 2u);
+	EXPECT_EQ(decl.members[0].name, "RED");
+	EXPECT_FALSE(decl.members[0].explicitValue.has_value());
+	EXPECT_EQ(decl.members[1].name, "GREEN");
+	ASSERT_TRUE(decl.members[1].explicitValue.has_value());
+	EXPECT_EQ(*decl.members[1].explicitValue, 3);
+}
+
+TEST(DeclTests, ExternEnumDecl) {
+	std::vector<ExternEnumEntryDecl> entries;
+	entries.emplace_back(EnumMemberDecl(Name("RG_HOOKSHOT")));
+	entries.emplace_back(EnumPatternDecl("RG_*"));
+
+	ExternEnumDecl decl(Name("Item"), std::move(entries));
+
+	EXPECT_EQ(decl.name, "Item");
+	ASSERT_EQ(decl.entries.size(), 2u);
+	ASSERT_TRUE(std::holds_alternative<EnumMemberDecl>(decl.entries[0]));
+	ASSERT_TRUE(std::holds_alternative<EnumPatternDecl>(decl.entries[1]));
+	EXPECT_EQ(std::get<EnumMemberDecl>(decl.entries[0]).name, "RG_HOOKSHOT");
+	EXPECT_EQ(std::get<EnumPatternDecl>(decl.entries[1]).pattern, "RG_*");
 }
 
 // == File =====================================================================

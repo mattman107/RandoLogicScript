@@ -51,14 +51,14 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Generate SOH C++ enum declarations from normal RLS enums so the emitted C++ has matching enum types and values.
 
 **Phase 6 - Tests And Documentation**
-- [ ] Parser tests: enum and extern enum declarations, optional explicit values, glob entries, dotted member expressions, malformed cases.
-- [ ] Sema tests: duplicate enum declarations, member value assignment auto-increment, wildcard expansion, ambiguity diagnostics, enum/int implicit conversions, dot disambiguation success paths.
-- [ ] AST tests: new declaration variants, enum identity table storage/retrieval, member expression node construction.
-- [ ] Transpiler tests: generated C++ for bare and dotted enum values, enum params, conversion-heavy expressions.
+- [x] Parser tests: enum and extern enum declarations, optional explicit values, glob entries, dotted member expressions, malformed cases.
+- [x] Sema tests: duplicate enum declarations, member value assignment auto-increment, wildcard expansion, ambiguity diagnostics, enum/int implicit conversions, dot disambiguation success paths.
+- [x] AST tests: new declaration variants, enum identity table storage/retrieval, member expression node construction.
+- [x] Transpiler tests: generated C++ for bare and dotted enum values, enum params, conversion-heavy expressions.
 - [ ] Docs updates: language spec sections on core types, type inference, enum declarations, extern wildcards, ambiguity rules, and conversion semantics.
 
 **Phase 7 - Verification And Rollout**
-- [ ] Run parser, sema, ast, and soh transpiler test suites.
+- [x] Run parser, sema, ast, and soh transpiler test suites.
 - [ ] Add golden examples showing both non-ambiguous bare constants and ambiguity requiring EnumName.ValueName.
 - [ ] Validate existing scripts still compile unchanged unless an intentional ambiguity is introduced by new enums.
 
@@ -78,6 +78,8 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-24: Completed Phase 5 task C (enum-typed function signatures): SOH function header/source generation now maps `Type::Enum` using enum identity metadata (`project.getEnumType`) and emits concrete C++ enum type names (builtin mapped names or user/extern enum names). Added 2 function-generation tests; full suite now 668/668 passing.
 - 2026-07-24: Completed Phase 5 task D (explicit cast emission for conversions): call argument generation now emits `static_cast<int>(...)` for enum-to-int arguments and `static_cast<EnumType>(...)` for int-to-enum arguments where enum context exists. Added 2 SOH expression tests; full suite now 670/670 passing.
 - 2026-07-24: Completed Phase 5 task E (normal enum declaration emission): SOH function headers now emit scoped C++ enum definitions for normal RLS enums before function declarations, preserving explicit numeric values. Added 1 function-generation test; full suite now 671/671 passing.
+- 2026-07-24: Completed Phase 6 test checklist items A-D. Added AST coverage for member-expression node construction and enum/extern-enum declaration variants. Validated full suite at 674/674 passing.
+- 2026-07-24: Completed Phase 7 task A (verification run): executed full parser, sema, ast, and SOH transpiler suites via CTest with all tests passing (674/674).
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
