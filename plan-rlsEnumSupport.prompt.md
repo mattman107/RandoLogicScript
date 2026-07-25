@@ -45,9 +45,10 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 
 **Phase 5 - Transpiler Integration**
 - [x] Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
-- [ ] Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
+- [x] Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
 - [x] Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 - [x] Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
+- [ ] Generate SOH C++ enum declarations from normal RLS enums so the emitted C++ has matching enum types and values.
 
 **Phase 6 - Tests And Documentation**
 - [ ] Parser tests: enum and extern enum declarations, optional explicit values, glob entries, dotted member expressions, malformed cases.
@@ -113,9 +114,10 @@ J. ✓ Update match typing so discriminant/pattern unification supports enum ide
 
 5. Phase 5 - Transpiler Integration (depends on 4)
 A. ✓ Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
-B. Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
+B. ✓ Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
 C. ✓ Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 D. ✓ Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
+E. Generate SOH C++ enum declarations from normal RLS enums so the emitted C++ has matching enum types and values.
 
 6. Phase 6 - Tests And Documentation (parallel with 3-5 once interfaces stabilize)
 A. Parser tests: enum and extern enum declarations, optional explicit values, glob entries, dotted member expressions, malformed cases.
