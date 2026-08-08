@@ -48,14 +48,6 @@ std::optional<std::string> enumCppType(std::string_view enumName) {
     return std::string(enumName);
 }
 
-std::optional<std::string_view> sharedConceptEnumName(rls::ast::Type type) {
-    switch (type) {
-    case rls::ast::Type::Region: return "Region";
-    case rls::ast::Type::Check: return "Check";
-    default: return std::nullopt;
-    }
-}
-
 bool isEnumLikeType(rls::ast::Type type) {
     return type == rls::ast::Type::Enum;
 }
@@ -88,12 +80,6 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::Identifier& node) 
     if (node.kind == rls::ast::IdentifierKind::EnumValue) {
         if (auto enumName = project.getEnumType(&node); enumName.has_value()) {
             return qualifyEnumValue(*enumName, node.name.text);
-        }
-
-        if (auto type = project.getType(&node); type.has_value()) {
-            if (auto conceptName = sharedConceptEnumName(*type); conceptName.has_value()) {
-                return qualifyEnumValue(*conceptName, node.name.text);
-            }
         }
 
         return node.name.text;

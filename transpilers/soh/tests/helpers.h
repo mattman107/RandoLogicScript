@@ -56,6 +56,8 @@ inline std::string withHostExterns(const std::string& source) {
 		"extern enum Trial { TK_* }\n"
 		"extern enum WaterLevel { WL_* }\n"
 		"extern enum Setting { RSK_*, RO_* }\n"
+		"extern enum Region { RR_* }\n"
+		"extern enum Check { RC_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"extern define keys(sc: Scene, amount: Int) -> Bool\n"

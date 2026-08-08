@@ -22,16 +22,6 @@ static size_t countErrors(const std::vector<Diagnostic>& diags) {
 	return n;
 }
 
-// == typeFromIdentifier (Step 1) ==============================================
-
-TEST(EnumPrefix, Region)     { EXPECT_EQ(typeFromIdentifier("RR_SPIRIT_TEMPLE_FOYER"), Type::Region); }
-TEST(EnumPrefix, Check)      { EXPECT_EQ(typeFromIdentifier("RC_SPIRIT_TEMPLE_CHEST"), Type::Check); }
-
-TEST(EnumPrefix, UnknownName) { EXPECT_FALSE(typeFromIdentifier("distance").has_value()); }
-TEST(EnumPrefix, EmptyString) { EXPECT_FALSE(typeFromIdentifier("").has_value()); }
-TEST(EnumPrefix, GameSpecificName) { EXPECT_FALSE(typeFromIdentifier("RG_HOOKSHOT").has_value()); }
-TEST(EnumPrefix, SettingName) { EXPECT_FALSE(typeFromIdentifier("RSK_SUNLIGHT_ARROWS").has_value()); }
-
 // == resolveTypes (Steps 2-3) =================================================
 
 static std::string withHostExterns(const std::string& source) {
@@ -47,6 +37,8 @@ static std::string withHostExterns(const std::string& source) {
 		"extern enum Trial { TK_* }\n"
 		"extern enum WaterLevel { WL_* }\n"
 		"extern enum Setting { RSK_*, RO_* }\n"
+		"extern enum Region { RR_* }\n"
+		"extern enum Check { RC_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"extern define keys(sc: Scene, amount: Int) -> Bool\n"
@@ -1404,6 +1396,8 @@ TEST(ResolveTypes, HereResolvesToCurrentRegion) {
 	ASSERT_EQ(resolved->size(), 1u);
 	ASSERT_TRUE(std::holds_alternative<HereRef>((*resolved)[0]->node));
 	EXPECT_EQ(std::get<HereRef>((*resolved)[0]->node).resolvedRegion, "RR_TEST");
+	EXPECT_EQ(project.getType((*resolved)[0]), Type::Enum);
+	EXPECT_EQ(project.getEnumType((*resolved)[0]), "Region");
 }
 
 TEST(ResolveTypes, HereInExtendRegionResolvesToTargetName) {
@@ -1424,6 +1418,8 @@ TEST(ResolveTypes, HereInExtendRegionResolvesToTargetName) {
 	ASSERT_NE(resolved, nullptr);
 	ASSERT_TRUE(std::holds_alternative<HereRef>((*resolved)[0]->node));
 	EXPECT_EQ(std::get<HereRef>((*resolved)[0]->node).resolvedRegion, "RR_BASE");
+	EXPECT_EQ(project.getType((*resolved)[0]), Type::Enum);
+	EXPECT_EQ(project.getEnumType((*resolved)[0]), "Region");
 }
 
 TEST(ResolveTypes, HereOutsideRegionIsError) {
@@ -1760,8 +1756,8 @@ TEST(TypeAnnotation, CoreTypes) {
 	EXPECT_EQ(typeFromAnnotation("Condition"),  Type::Condition);
 	EXPECT_EQ(typeFromAnnotation("Enum"),       Type::Enum);
 	EXPECT_FALSE(typeFromAnnotation("Setting").has_value());
-	EXPECT_EQ(typeFromAnnotation("Region"),     Type::Region);
-	EXPECT_EQ(typeFromAnnotation("Check"),      Type::Check);
+	EXPECT_FALSE(typeFromAnnotation("Region").has_value());
+	EXPECT_FALSE(typeFromAnnotation("Check").has_value());
 }
 
 TEST(TypeAnnotation, Unknown) {

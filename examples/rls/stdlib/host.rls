@@ -9,6 +9,8 @@ extern enum Area { RA_* }
 extern enum Trial { TK_* }
 extern enum WaterLevel { WL_* }
 extern enum Setting { RSK_*, RO_* }
+extern enum Region { RR_* }
+extern enum Check { RC_* }
 
 extern define has(item: Item) -> Bool
 extern define can_use(item: Item) -> Bool

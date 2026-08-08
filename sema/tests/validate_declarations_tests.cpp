@@ -25,8 +25,14 @@ static std::pair<Project, std::vector<Diagnostic>> validateFromSource(
 	const std::string hostSettingEnum = source.find("enum Setting") == std::string::npos
 		? "extern enum Setting { RSK_*, RO_* }\n"
 		: "";
+	const std::string hostRegionEnum = source.find("enum Region") == std::string::npos
+		? "extern enum Region { RR_* }\n"
+		: "";
+	const std::string hostCheckEnum = source.find("enum Check") == std::string::npos
+		? "extern enum Check { RC_* }\n"
+		: "";
 	project.files.push_back(rls::parser::ParseString(
-		hostItemEnum + hostSettingEnum
+		hostItemEnum + hostSettingEnum + hostRegionEnum + hostCheckEnum
 		+ "extern enum Distance { ED_* }\n"
 		+ "extern define setting(key: Setting) -> Int\n"
 		+ source));

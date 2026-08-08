@@ -10,29 +10,6 @@
 
 namespace rls::sema {
 
-// == Step 1: Shared cross-game concept resolution ============================
-
-std::optional<ast::Type> typeFromIdentifier(std::string_view name) {
-	struct PrefixEntry {
-		std::string_view prefix;
-		ast::Type type;
-	};
-
-	// These concepts are part of the RLS language. Game-specific constants are
-	// declared with `extern enum` and resolved from Project::EnumInfos instead.
-	static constexpr PrefixEntry table[] = {
-		{"RR_",      ast::Type::Region},
-		{"RC_",      ast::Type::Check},
-	};
-
-	for (const auto& [prefix, type] : table) {
-		if (name.starts_with(prefix)) {
-			return type;
-		}
-	}
-	return std::nullopt;
-}
-
 // == Two-Stage Identifier Lookup (Stage A + B) ===============================
 
 /// Result of two-stage identifier lookup.
@@ -43,8 +20,7 @@ struct IdentifierLookupResult {
 };
 
 /// Two-stage identifier lookup:
-/// Stage A: Check if identifier matches any enum member (including glob patterns).
-/// Stage B: If no enum match, fall back to core Region and Check prefixes.
+/// Check whether an identifier matches a declared enum member or glob pattern.
 /// Returns error info if multiple enums claim the identifier (ambiguity).
 static IdentifierLookupResult lookupIdentifierInEnums(
 	std::string_view name, const ast::Project& project) {
@@ -84,16 +60,6 @@ static IdentifierLookupResult lookupIdentifierInEnums(
 		return {
 			.type = ast::Type::Enum,
 			.enumName = std::move(matchingEnums[0]),
-			.ambiguousEnums = {}
-		};
-	}
-
-	// Stage B: Fall back to shared core concept prefixes.
-	auto builtinType = typeFromIdentifier(name);
-	if (builtinType) {
-		return {
-			.type = *builtinType,
-			.enumName = std::nullopt,
 			.ambiguousEnums = {}
 		};
 	}
@@ -302,7 +268,7 @@ struct ExprResolver {
 			return ast::Type::Condition;
 		}
 
-		// Two-stage identifier lookup: Stage A (enums) + Stage B (prefix map)
+		// Resolve identifiers exclusively through declared enum metadata.
 		auto lookup = lookupIdentifierInEnums(node.name.text, project);
 
 		// Check for ambiguity (multiple enums claiming the same identifier)
@@ -325,12 +291,6 @@ struct ExprResolver {
 		if (lookup.type && lookup.enumName) {
 			node.kind = ast::IdentifierKind::EnumValue;
 			project.setEnumType(&expr, *lookup.enumName);
-			return *lookup.type;
-		}
-
-		// If found via prefix map (Stage B fallback)
-		if (lookup.type) {
-			node.kind = ast::IdentifierKind::EnumValue;
 			return *lookup.type;
 		}
 
@@ -1036,7 +996,8 @@ struct ExprResolver {
 			return T::Error;
 		}
 		node.resolvedRegion = *currentRegion;
-		return T::Region;
+		project.setEnumType(&expr, "Region");
+		return T::Enum;
 	}
 
 	ast::Type resolve(const ast::MatchExpr& node, const ast::Expr& expr) {

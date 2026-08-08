@@ -20,8 +20,6 @@ inline std::string_view typeName(ast::Type t) {
 	case ast::Type::Callable:   return "Callable";
 	case ast::Type::Condition:  return "Condition";
 	case ast::Type::Enum:       return "Enum";
-	case ast::Type::Region:     return "Region";
-	case ast::Type::Check:      return "Check";
 	case ast::Type::Void:       return "Void";
 	case ast::Type::Error:      return "<error>";
 	}
@@ -50,8 +48,6 @@ inline std::optional<ast::Type> typeFromAnnotation(std::string_view annotation) 
 		{"Callable",   ast::Type::Callable},
 		{"Condition",  ast::Type::Condition},
 		{"Enum",       ast::Type::Enum},
-		{"Region",     ast::Type::Region},
-		{"Check",      ast::Type::Check},
 	};
 
 	for (const auto& [name, type] : table) {
