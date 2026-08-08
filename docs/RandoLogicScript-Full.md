@@ -98,10 +98,9 @@ extend region RR_SPIRIT_TEMPLE_FOYER {
 | `bool`       | `true`, `false`, comparisons, logical expressions                                  | Boolean value.                                        |
 | `int`        | `0`, `3`, arithmetic expressions                                                    | Integer value.                                        |
 | `Condition`  | `has(RG_HOOKSHOT)`, a zero-argument callable                                        | Callable condition.                                   |
-| `Setting`    | `setting(...)` results and option values                                            | Cross-game configuration option.                       |
 | `Region`     | Region keys and `here`                                                              | Cross-game world region.                               |
 | `Check`      | Location/check keys                                                                 | Cross-game randomized check or location.               |
-| Enum name    | `Item`, `Distance`, `Color`, `EnemyDistance`                                        | A first-class enum type declared by `enum` or `extern enum`. |
+| Enum name    | `Item`, `Setting`, `Distance`, `Color`, `EnemyDistance`                             | A first-class enum type declared by `enum` or `extern enum`. |
 
 All names use the **same identifiers as the C++ enums**. This eliminates a mapping layer, makes cross-referencing trivial, and allows the transpiler to emit enum values directly. Names are validated at transpile time against the enum registry generated from `randomizerEnums.h`.
 
@@ -109,7 +108,7 @@ All names use the **same identifiers as the C++ enums**. This eliminates a mappi
 
 RLS does not require type annotations in most cases - the transpiler infers types at transpile time from context:
 
-1. **Enum identifiers are resolved in two stages.** Stage A resolves known enum members from normal and extern enum declarations (including wildcard-pattern matches). Stage B recognizes only the shared `Setting`, `Region`, and `Check` concepts. If a bare identifier matches multiple enums, this is a hard error and requires dotted disambiguation (`EnumName.ValueName`).
+1. **Enum identifiers are resolved in two stages.** Stage A resolves known enum members from normal and extern enum declarations (including wildcard-pattern matches). Stage B recognizes only the shared `Region` and `Check` concepts. Host setting keys and option values must be declared explicitly, for example `extern enum Setting { RSK_*, RO_* }`. `Setting` is an ordinary named enum, not a built-in type. If a bare identifier matches multiple enums, this is a hard error and requires dotted disambiguation (`EnumName.ValueName`).
 
 2. **Host-call signatures are declared with `extern define`.** For example, `extern define has(item: Item) -> bool`, `extern define keys(scene: Scene, n: int) -> int`, and `extern define trick(key: Trick) -> bool`. The transpiler validates arguments against these declared signatures.
 
@@ -141,6 +140,11 @@ extern enum Item {
     RG_HOOKSHOT,
     RG_*,
     *_KEY
+}
+
+extern enum Setting {
+    RSK_*,
+    RO_*
 }
 ```
 
@@ -528,7 +532,7 @@ Functions returning `int` have implicit `int → bool` conversion (zero is `fals
 
 #### Setting & Trick Semantics
 
-`setting()` and `trick()` return option values that support comparison operators and boolean truthiness:
+`setting()` accepts a host-declared setting-key enum and returns an `int`; `trick()` returns `bool`. Setting values can be compared with option enum values through implicit enum/int conversion, and integer truthiness supports boolean uses:
 
 | Usage                                            | C++ equivalent                                          | Meaning                                    |
 | ------------------------------------------------ | ------------------------------------------------------- | ------------------------------------------ |

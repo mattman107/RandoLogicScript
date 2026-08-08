@@ -479,7 +479,6 @@ enum class Type {
 	Callable,   // generic callable value
 	Condition,  // callable with signature () -> Bool
 	Enum,       // user-defined or host-defined enum value, identified by Project metadata
-	Setting,    // cross-game configuration option
 	Region,     // cross-game world region
 	Check,      // cross-game randomized check/location
     Void,       // statements / declarations with no value

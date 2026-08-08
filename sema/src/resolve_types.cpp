@@ -21,8 +21,6 @@ std::optional<ast::Type> typeFromIdentifier(std::string_view name) {
 	// These concepts are part of the RLS language. Game-specific constants are
 	// declared with `extern enum` and resolved from Project::EnumInfos instead.
 	static constexpr PrefixEntry table[] = {
-		{"RSK_",     ast::Type::Setting},
-		{"RO_",      ast::Type::Setting},
 		{"RR_",      ast::Type::Region},
 		{"RC_",      ast::Type::Check},
 	};
@@ -46,7 +44,7 @@ struct IdentifierLookupResult {
 
 /// Two-stage identifier lookup:
 /// Stage A: Check if identifier matches any enum member (including glob patterns).
-/// Stage B: If no enum match, fall back to prefix-based builtin type lookup.
+/// Stage B: If no enum match, fall back to core Region and Check prefixes.
 /// Returns error info if multiple enums claim the identifier (ambiguity).
 static IdentifierLookupResult lookupIdentifierInEnums(
 	std::string_view name, const ast::Project& project) {
@@ -90,7 +88,7 @@ static IdentifierLookupResult lookupIdentifierInEnums(
 		};
 	}
 
-	// Stage B: Fall back to prefix-based builtin type lookup
+	// Stage B: Fall back to shared core concept prefixes.
 	auto builtinType = typeFromIdentifier(name);
 	if (builtinType) {
 		return {

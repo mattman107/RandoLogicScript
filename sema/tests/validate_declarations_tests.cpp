@@ -22,8 +22,14 @@ static std::pair<Project, std::vector<Diagnostic>> validateFromSource(
 	const std::string hostItemEnum = source.find("enum Item") == std::string::npos
 		? "extern enum Item { RG_* }\n"
 		: "";
+	const std::string hostSettingEnum = source.find("enum Setting") == std::string::npos
+		? "extern enum Setting { RSK_*, RO_* }\n"
+		: "";
 	project.files.push_back(rls::parser::ParseString(
-		hostItemEnum + "extern enum Distance { ED_* }\n" + source));
+		hostItemEnum + hostSettingEnum
+		+ "extern enum Distance { ED_* }\n"
+		+ "extern define setting(key: Setting) -> Int\n"
+		+ source));
 	collectDeclarations(project);
 	resolveTypes(project);
 	auto diags = validateDeclarations(project);
@@ -391,6 +397,20 @@ TEST(ValidateDeclarations, EntryConditionSettingBoolCompatible_Ok) {
 		"    }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 0u);
+}
+
+TEST(ValidateDeclarations, EntryConditionSettingKeyIsNotBool) {
+	auto [project, diags] = validateFromSource(
+		"region RR_FOYER {\n"
+		"    name: \"Foyer\"\n"
+		"    scene: SCENE_SPIRIT_TEMPLE\n"
+		"    locations {\n"
+		"        RC_POT: RSK_SHUFFLE_POTS\n"
+		"    }\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("must be Bool, got Enum"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, MultipleNonBoolConditions) {

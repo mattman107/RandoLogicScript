@@ -89,7 +89,6 @@ std::string nodeType(const rls::ast::Project& p, const T* node) {
         case AT::Int: return "int";
         case AT::Callable: return "std::function<bool()>";
         case AT::Condition: return "std::function<bool()>";
-        case AT::Setting: return "RandomizerSettingKey";
         case AT::Region: return "RandomizerRegion";
         case AT::Check: return "RandomizerCheck";
         case AT::Enum: return enumNodeType(p, node);

@@ -20,7 +20,6 @@ inline std::string_view typeName(ast::Type t) {
 	case ast::Type::Callable:   return "Callable";
 	case ast::Type::Condition:  return "Condition";
 	case ast::Type::Enum:       return "Enum";
-	case ast::Type::Setting:    return "Setting";
 	case ast::Type::Region:     return "Region";
 	case ast::Type::Check:      return "Check";
 	case ast::Type::Void:       return "Void";
@@ -30,11 +29,10 @@ inline std::string_view typeName(ast::Type t) {
 }
 
 /// Returns true if the type can be implicitly used where Bool is expected.
-/// Int and Setting both have truthiness (zero/non-zero).
+/// Int values have truthiness (zero/non-zero).
 inline bool isBoolCompatible(ast::Type t) {
 	return t == ast::Type::Bool
-		|| t == ast::Type::Int
-		|| t == ast::Type::Setting;
+		|| t == ast::Type::Int;
 }
 
 /// Parse a built-in type annotation string (e.g. "Bool") to a Type enum value.
@@ -52,7 +50,6 @@ inline std::optional<ast::Type> typeFromAnnotation(std::string_view annotation) 
 		{"Callable",   ast::Type::Callable},
 		{"Condition",  ast::Type::Condition},
 		{"Enum",       ast::Type::Enum},
-		{"Setting",    ast::Type::Setting},
 		{"Region",     ast::Type::Region},
 		{"Check",      ast::Type::Check},
 	};

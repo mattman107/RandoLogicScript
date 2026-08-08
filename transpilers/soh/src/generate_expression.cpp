@@ -50,7 +50,6 @@ std::optional<std::string> enumCppType(std::string_view enumName) {
 
 std::optional<std::string_view> sharedConceptEnumName(rls::ast::Type type) {
     switch (type) {
-    case rls::ast::Type::Setting: return "Setting";
     case rls::ast::Type::Region: return "Region";
     case rls::ast::Type::Check: return "Check";
     default: return std::nullopt;

@@ -24,14 +24,13 @@ static size_t countErrors(const std::vector<Diagnostic>& diags) {
 
 // == typeFromIdentifier (Step 1) ==============================================
 
-TEST(EnumPrefix, SettingRSK) { EXPECT_EQ(typeFromIdentifier("RSK_SUNLIGHT_ARROWS"), Type::Setting); }
-TEST(EnumPrefix, SettingRO)  { EXPECT_EQ(typeFromIdentifier("RO_CLOSED_FOREST_ON"), Type::Setting); }
 TEST(EnumPrefix, Region)     { EXPECT_EQ(typeFromIdentifier("RR_SPIRIT_TEMPLE_FOYER"), Type::Region); }
 TEST(EnumPrefix, Check)      { EXPECT_EQ(typeFromIdentifier("RC_SPIRIT_TEMPLE_CHEST"), Type::Check); }
 
 TEST(EnumPrefix, UnknownName) { EXPECT_FALSE(typeFromIdentifier("distance").has_value()); }
 TEST(EnumPrefix, EmptyString) { EXPECT_FALSE(typeFromIdentifier("").has_value()); }
 TEST(EnumPrefix, GameSpecificName) { EXPECT_FALSE(typeFromIdentifier("RG_HOOKSHOT").has_value()); }
+TEST(EnumPrefix, SettingName) { EXPECT_FALSE(typeFromIdentifier("RSK_SUNLIGHT_ARROWS").has_value()); }
 
 // == resolveTypes (Steps 2-3) =================================================
 
@@ -47,10 +46,11 @@ static std::string withHostExterns(const std::string& source) {
 		"extern enum Area { RA_* }\n"
 		"extern enum Trial { TK_* }\n"
 		"extern enum WaterLevel { WL_* }\n"
+		"extern enum Setting { RSK_*, RO_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"extern define keys(sc: Scene, amount: Int) -> Bool\n"
-		"extern define setting(opt: Setting) -> Setting\n"
+		"extern define setting(opt: Setting) -> Int\n"
 		"extern define trick(rule: Trick) -> Bool\n"
 		"extern define any_age(condition: Condition) -> Bool\n"
 		"extern define spirit_shared(first_region: Region, first_condition: Condition, any_age: Bool = false, second_region: Region = RR_NONE, second_condition: Condition = false, third_region: Region = RR_NONE, third_condition: Condition = false) -> Bool\n"
@@ -625,7 +625,21 @@ TEST(ResolveTypes, HostCallSetting) {
 		"    locations { TEST_LOC: setting(RSK_SUNLIGHT_ARROWS) }\n"
 		"}\n");
 	EXPECT_TRUE(diags.empty());
-	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Setting);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Int);
+}
+
+TEST(ResolveTypes, DeclaredSettingEnumValueUsesEnumType) {
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: RSK_SUNLIGHT_ARROWS }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	const auto* expr = findRegionEntry(project);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
+	EXPECT_EQ(project.getEnumType(expr), "Setting");
 }
 
 TEST(ResolveTypes, HostCallReturnsInt) {
@@ -1700,7 +1714,7 @@ TEST(ResolveTypes, SubExprTypesPopulated) {
 
 TEST(ResolveTypes, SettingIsComparison) {
 	// setting(RSK_FOREST) is RO_CLOSED_FOREST_ON
-	// → setting() returns Setting, RO_ is Setting, == both Setting → Bool.
+	// → setting() returns Int and RO_ is an enum value, so == is Bool.
 	auto [project, diags] = resolveFromSource(
 		"region RR_TEST {\n"
 		"    name: \"Test\"\n"
@@ -1712,7 +1726,7 @@ TEST(ResolveTypes, SettingIsComparison) {
 }
 
 TEST(ResolveTypes, SettingBoolTruthiness) {
-	// setting(RSK_SUNLIGHT_ARROWS) and true — Setting is bool-compatible.
+	// setting(RSK_SUNLIGHT_ARROWS) and true — Int is bool-compatible.
 	auto [project, diags] = resolveFromSource(
 		"region RR_TEST {\n"
 		"    name: \"Test\"\n"
@@ -1745,7 +1759,7 @@ TEST(TypeAnnotation, CoreTypes) {
 	EXPECT_EQ(typeFromAnnotation("Callable"),   Type::Callable);
 	EXPECT_EQ(typeFromAnnotation("Condition"),  Type::Condition);
 	EXPECT_EQ(typeFromAnnotation("Enum"),       Type::Enum);
-	EXPECT_EQ(typeFromAnnotation("Setting"),    Type::Setting);
+	EXPECT_FALSE(typeFromAnnotation("Setting").has_value());
 	EXPECT_EQ(typeFromAnnotation("Region"),     Type::Region);
 	EXPECT_EQ(typeFromAnnotation("Check"),      Type::Check);
 }
