@@ -13,7 +13,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Implement option 1 model split: explicit enum members vs pattern declarations (`EnumEntryInfo = variant<EnumMemberInfo, EnumPatternInfo>`).
 - [x] Wire Enum through sema helper utilities in [sema/src/type_helpers.h](sema/src/type_helpers.h).
 - [x] Add non-breaking enum identity scaffolding in [sema/src/resolve_types.cpp](sema/src/resolve_types.cpp) for builtin enum identifiers.
-- [ ] Add compatibility touchups in transpiler type routing for Type::Enum.
+- [x] Add compatibility touchups in transpiler type routing for Type::Enum.
 - [x] Add/adjust AST and sema tests for completed Phase 1 slices.
 
 **Phase 2 - Grammar, AST, And Parsing**
@@ -81,6 +81,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - 2026-07-24: Completed Phase 6 test checklist items A-D. Added AST coverage for member-expression node construction and enum/extern-enum declaration variants. Validated full suite at 674/674 passing.
 - 2026-07-24: Completed Phase 6 task E (docs updates): updated language docs to cover core `Enum` type behavior, two-stage enum resolution, enum/extern enum declarations, wildcard entries, ambiguity disambiguation via `EnumName.ValueName`, and enum/int conversion semantics.
 - 2026-07-24: Completed Phase 7 task A (verification run): executed full parser, sema, ast, and SOH transpiler suites via CTest with all tests passing (674/674).
+- 2026-08-08: Replaced target-specific semantic enum categories with first-class named enums. `Type` now retains only generic `Enum` plus cross-game `Setting`, `Region`, and `Check`; game-target enum names are declared through `extern enum`. Named enum annotations (for example, `color: Color`) resolve through project metadata and retain enum identity through parameter, call, ternary, and default-value validation. Updated SOH routing, tests, and language documentation.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
@@ -184,7 +185,7 @@ C. Validate existing scripts still compile unchanged unless an intentional ambig
 1. Host registry contract should be frozen early (member name, integer value, C++ qualified type path) to prevent rework in Phase 5.
 2. If int to enum implicit conversion causes noisy ambiguity in practice, add a follow-up lint mode before changing language semantics.
 3. Introduce a compatibility flag only if existing scripts encounter unexpected ambiguity due to newly added user enums in shared projects.
-4. Consider upgrading type annotations so user-defined enum names are first-class annotation types (for example `c: Color`), instead of relying on generic `Enum` plus default-value identity hints.
+4. Completed: user-defined and extern enum names are first-class annotation types (for example `c: Color`) and retain their enum identity without a default-value hint.
 
 **It is imperative to use the VS Code CMake Tools extension for configuring, building, and running tests, otherwise the project may not compile due to bitness issues.**
 **Each step must be reviewed, be sure to take small steps to make it easier to review and commit.**

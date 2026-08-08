@@ -664,6 +664,7 @@ TEST(CollectDeclarations, DiagnosticSpanPointsToDuplicate) {
 TEST(Analyze, PopulatesDeclMaps) {
 	Project project;
 	project.files.push_back(rls::parser::ParseString(
+		"extern enum Item { RG_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"region RR_FOYER {\n"

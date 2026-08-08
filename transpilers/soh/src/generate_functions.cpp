@@ -51,6 +51,15 @@ void writeEnumDeclarations(std::ostream& out, const rls::ast::Project& project) 
     }
 }
 
+bool hasNormalEnums(const rls::ast::Project& project) {
+    for (const auto& [_, info] : project.EnumInfos) {
+        if (info.kind == rls::ast::EnumKind::Normal) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <typename T>
 std::string enumNodeType(const rls::ast::Project& p, const T* node) {
     auto enumType = p.getEnumType(node);
@@ -80,19 +89,9 @@ std::string nodeType(const rls::ast::Project& p, const T* node) {
         case AT::Int: return "int";
         case AT::Callable: return "std::function<bool()>";
         case AT::Condition: return "std::function<bool()>";
-        case AT::Item: return "RandomizerGet";
-        case AT::Enemy: return "RandomizerEnemy";
-        case AT::Distance: return "EnemyDistance";
-        case AT::Trick: return "RandomizerTrick";
         case AT::Setting: return "RandomizerSettingKey";
         case AT::Region: return "RandomizerRegion";
         case AT::Check: return "RandomizerCheck";
-        case AT::Logic: return "LogicVal";
-        case AT::Scene: return "SceneID";
-        case AT::Dungeon: return "DungeonKey";
-        case AT::Area: return "RandomizerArea";
-        case AT::Trial: return "TrialKey";
-        case AT::WaterLevel: return "RandoWaterLevel";
         case AT::Enum: return enumNodeType(p, node);
         default: return "unsupported_type";
     }
@@ -133,7 +132,7 @@ void SohTranspiler::GenerateFunctionDefinitionsHeader(rls::OutputWriter& out) co
            << "\n";
 
     writeEnumDeclarations(header, project);
-    if (!project.EnumInfos.empty()) {
+    if (hasNormalEnums(project)) {
         header << "\n";
     }
 

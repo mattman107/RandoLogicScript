@@ -10,7 +10,7 @@
 
 namespace rls::sema {
 
-// == Step 1: Enum prefix resolution ==========================================
+// == Step 1: Shared cross-game concept resolution ============================
 
 std::optional<ast::Type> typeFromIdentifier(std::string_view name) {
 	struct PrefixEntry {
@@ -18,22 +18,13 @@ std::optional<ast::Type> typeFromIdentifier(std::string_view name) {
 		ast::Type type;
 	};
 
-	// Longer prefixes first where they share a starting substring.
+	// These concepts are part of the RLS language. Game-specific constants are
+	// declared with `extern enum` and resolved from Project::EnumInfos instead.
 	static constexpr PrefixEntry table[] = {
-		{"LOGIC_",   ast::Type::Logic},
-		{"SCENE_",   ast::Type::Scene},
-		{"DUNGEON_", ast::Type::Dungeon},
-		{"RG_",      ast::Type::Item},
-		{"RE_",      ast::Type::Enemy},
-		{"ED_",      ast::Type::Distance},
-		{"RT_",      ast::Type::Trick},
 		{"RSK_",     ast::Type::Setting},
 		{"RO_",      ast::Type::Setting},
 		{"RR_",      ast::Type::Region},
 		{"RC_",      ast::Type::Check},
-		{"RA_",      ast::Type::Area},
-		{"TK_",      ast::Type::Trial},
-		{"WL_",      ast::Type::WaterLevel},
 	};
 
 	for (const auto& [prefix, type] : table) {
@@ -117,41 +108,12 @@ static IdentifierLookupResult lookupIdentifierInEnums(
 	};
 }
 
-static bool isBuiltinEnumType(ast::Type type) {
-	switch (type) {
-	case ast::Type::Item:
-	case ast::Type::Enemy:
-	case ast::Type::Distance:
-	case ast::Type::Trick:
-	case ast::Type::Setting:
-	case ast::Type::Region:
-	case ast::Type::Check:
-	case ast::Type::Logic:
-	case ast::Type::Scene:
-	case ast::Type::Dungeon:
-	case ast::Type::Area:
-	case ast::Type::Trial:
-	case ast::Type::WaterLevel:
-		return true;
-	default:
-		return false;
-	}
-}
-
 static bool isEnumLikeType(ast::Type type) {
-	return type == ast::Type::Enum || isBuiltinEnumType(type);
+	return type == ast::Type::Enum;
 }
 
 static bool isIntCompatibleType(ast::Type type) {
 	return type == ast::Type::Int || isEnumLikeType(type);
-}
-
-static std::optional<ast::Type> builtinEnumTypeFromName(std::string_view enumName) {
-	auto type = typeFromAnnotation(enumName);
-	if (type.has_value() && isBuiltinEnumType(*type)) {
-		return type;
-	}
-	return std::nullopt;
 }
 
 static bool enumEntryMatchesName(const ast::EnumEntryInfo& entry, std::string_view valueName) {
@@ -326,13 +288,13 @@ struct ExprResolver {
 				return ast::Type::Error;
 			}
 
-			auto returnType = typeFromAnnotation(ext->returnType->name.text);
-			if (!returnType.has_value() || *returnType != ast::Type::Bool) {
+			auto returnType = resolveTypeAnnotation(project, ext->returnType->name.text);
+			if (!returnType.has_value() || returnType->type != ast::Type::Bool) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("function '{}' cannot be used as a Condition callable because it returns {}",
 						node.name.text,
-						returnType.has_value() ? typeName(*returnType) : std::string_view{"<unknown>"}),
+						returnType.has_value() ? typeName(returnType->type) : std::string_view{"<unknown>"}),
 					expr.span
 				});
 				return ast::Type::Error;
@@ -371,9 +333,6 @@ struct ExprResolver {
 		// If found via prefix map (Stage B fallback)
 		if (lookup.type) {
 			node.kind = ast::IdentifierKind::EnumValue;
-			if (isBuiltinEnumType(*lookup.type)) {
-				project.setEnumType(&expr, std::string(typeName(*lookup.type)));
-			}
 			return *lookup.type;
 		}
 
@@ -478,6 +437,18 @@ struct ExprResolver {
 					expr.span
 				});
 			}
+			if (leftType == T::Enum && rightType == T::Enum) {
+				auto leftEnum = project.getEnumType(node.left.get());
+				auto rightEnum = project.getEnumType(node.right.get());
+				if (leftEnum.has_value() && rightEnum.has_value() && *leftEnum != *rightEnum) {
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("comparison between enum '{}' and enum '{}'",
+							*leftEnum, *rightEnum),
+						expr.span
+					});
+				}
+			}
 			return T::Bool;
 
 		// Ordering: both sides must be Int.
@@ -550,7 +521,25 @@ struct ExprResolver {
 		if (thenType == T::Error) return elseType == T::Error ? T::Error : elseType;
 		if (elseType == T::Error) return thenType;
 
-		if (thenType == elseType) return thenType;
+		if (thenType == elseType) {
+			if (thenType == T::Enum) {
+				auto thenEnum = project.getEnumType(node.thenBranch.get());
+				auto elseEnum = project.getEnumType(node.elseBranch.get());
+				if (thenEnum.has_value() && elseEnum.has_value() && *thenEnum != *elseEnum) {
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("ternary branches have different enum types: '{}' and '{}'",
+							*thenEnum, *elseEnum),
+						expr.span
+					});
+					return T::Error;
+				}
+				if (thenEnum.has_value()) {
+					project.setEnumType(&expr, std::string(*thenEnum));
+				}
+			}
+			return thenType;
+		}
 
 		// Both bool-compatible but different (e.g. Int + Bool) → unify to Bool.
 		if (isBoolCompatible(thenType) && isBoolCompatible(elseType)) {
@@ -837,9 +826,12 @@ struct ExprResolver {
 	std::optional<T> resolveExternParamType(const ast::ExternDefineDecl& ext, size_t index) {
 		std::optional<T> paramType = project.getType(&ext.params[index]);
 		if (!paramType && ext.params[index].type) {
-			if (auto t = typeFromAnnotation(ext.params[index].type->name.text)) {
-				paramType = *t;
-				project.setType(&ext.params[index], *t);
+			if (auto annotation = resolveTypeAnnotation(project, ext.params[index].type->name.text)) {
+				paramType = annotation->type;
+				project.setType(&ext.params[index], annotation->type);
+				if (annotation->enumName.has_value()) {
+					project.setEnumType(&ext.params[index], std::string(*annotation->enumName));
+				}
 			}
 		}
 		if (!paramType && ext.params[index].defaultValue) {
@@ -928,8 +920,11 @@ struct ExprResolver {
 			if (!ext.returnType) {
 				return T::Error;
 			}
-			if (auto returnType = typeFromAnnotation(ext.returnType->name.text)) {
-				return *returnType;
+			if (auto returnType = resolveTypeAnnotation(project, ext.returnType->name.text)) {
+				if (returnType->enumName.has_value()) {
+					project.setEnumType(&expr, std::string(*returnType->enumName));
+				}
+				return returnType->type;
 			}
 			return T::Error;
 		}
@@ -967,6 +962,11 @@ struct ExprResolver {
 
 			// Return the define's body type if available.
 			if (auto bodyType = project.getType(def.body.get())) {
+				if (*bodyType == T::Enum) {
+					if (auto enumName = project.getEnumType(def.body.get()); enumName.has_value()) {
+						project.setEnumType(&expr, std::string(*enumName));
+					}
+				}
 				return *bodyType;
 			}
 			// Body not yet resolved — proper ordering in Step 7.
@@ -1020,28 +1020,12 @@ struct ExprResolver {
 			return T::Enum;
 		}
 
-		const auto builtinEnumType = builtinEnumTypeFromName(node.object.text);
-		if (!builtinEnumType.has_value()) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("unknown enum '{}' in member access", node.object.text),
-				expr.span
-			});
-			return T::Error;
-		}
-
-		auto memberType = typeFromIdentifier(node.member.text);
-		if (!memberType.has_value() || *memberType != *builtinEnumType) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("'{}' is not a member of enum '{}'", node.member.text, node.object.text),
-				expr.span
-			});
-			return T::Error;
-		}
-
-		project.setEnumType(&expr, node.object.text);
-		return T::Enum;
+		diags.push_back({
+			ast::DiagnosticLevel::Error,
+			std::format("unknown enum '{}' in member access", node.object.text),
+			expr.span
+		});
+		return T::Error;
 	}
 
 	ast::Type resolve(ast::HereRef& node, ast::Expr& expr) {
@@ -1392,8 +1376,12 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 		for (const auto& param : decl->params) {
 			std::optional<ast::Type> annotatedType;
 			if (param.type) {
-				if (auto t = typeFromAnnotation(param.type->name.text)) {
-					annotatedType = *t;
+				if (auto annotation = resolveTypeAnnotation(project, param.type->name.text)) {
+					annotatedType = annotation->type;
+					if (annotation->enumName.has_value()) {
+						project.setEnumType(&param, std::string(*annotation->enumName));
+						enumScope[param.name.text] = std::string(*annotation->enumName);
+					}
 				} else {
 					diags.push_back({
 						ast::DiagnosticLevel::Error,
@@ -1421,7 +1409,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			if (annotatedType) {
 				scope[param.name.text] = *annotatedType;
 				project.setType(&param, *annotatedType);
-				if (*annotatedType == ast::Type::Enum && param.defaultValue) {
+				if (*annotatedType == ast::Type::Enum && param.defaultValue
+					&& !project.getEnumType(&param).has_value()) {
 					auto defaultEnum = project.getEnumType(param.defaultValue.get());
 					if (defaultEnum.has_value()) {
 						project.setEnumType(&param, std::string(*defaultEnum));
@@ -1429,7 +1418,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 					} else {
 						enumScope[param.name.text] = std::nullopt;
 					}
-				} else if (*annotatedType == ast::Type::Enum) {
+				} else if (*annotatedType == ast::Type::Enum
+					&& !enumScope.contains(param.name.text)) {
 					enumScope[param.name.text] = std::nullopt;
 				}
 			} else if (defaultType) {
@@ -1464,6 +1454,12 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			auto scopeIt = scope.find(param.name.text);
 			if (scopeIt != scope.end() && scopeIt->second.has_value()) {
 				project.setType(&param, *scopeIt->second);
+				if (*scopeIt->second == ast::Type::Enum) {
+					if (auto enumIt = enumScope.find(param.name.text);
+						enumIt != enumScope.end() && enumIt->second.has_value()) {
+						project.setEnumType(&param, *enumIt->second);
+					}
+				}
 			}
 		}
 	}
@@ -1473,8 +1469,11 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 		for (const auto& param : decl->params) {
 			std::optional<ast::Type> annotatedType;
 			if (param.type) {
-				if (auto t = typeFromAnnotation(param.type->name.text)) {
-					annotatedType = *t;
+				if (auto annotation = resolveTypeAnnotation(project, param.type->name.text)) {
+					annotatedType = annotation->type;
+					if (annotation->enumName.has_value()) {
+						project.setEnumType(&param, std::string(*annotation->enumName));
+					}
 				} else {
 					diags.push_back({
 						ast::DiagnosticLevel::Error,
@@ -1501,7 +1500,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 
 			if (annotatedType) {
 				project.setType(&param, *annotatedType);
-				if (*annotatedType == ast::Type::Enum && param.defaultValue) {
+				if (*annotatedType == ast::Type::Enum && param.defaultValue
+					&& !project.getEnumType(&param).has_value()) {
 					auto defaultEnum = project.getEnumType(param.defaultValue.get());
 					if (defaultEnum.has_value()) {
 						project.setEnumType(&param, std::string(*defaultEnum));

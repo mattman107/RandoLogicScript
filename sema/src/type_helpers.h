@@ -20,19 +20,9 @@ inline std::string_view typeName(ast::Type t) {
 	case ast::Type::Callable:   return "Callable";
 	case ast::Type::Condition:  return "Condition";
 	case ast::Type::Enum:       return "Enum";
-	case ast::Type::Item:       return "Item";
-	case ast::Type::Enemy:      return "Enemy";
-	case ast::Type::Distance:   return "Distance";
-	case ast::Type::Trick:      return "Trick";
 	case ast::Type::Setting:    return "Setting";
 	case ast::Type::Region:     return "Region";
 	case ast::Type::Check:      return "Check";
-	case ast::Type::Logic:      return "Logic";
-	case ast::Type::Scene:      return "Scene";
-	case ast::Type::Dungeon:    return "Dungeon";
-	case ast::Type::Area:       return "Area";
-	case ast::Type::Trial:      return "Trial";
-	case ast::Type::WaterLevel: return "WaterLevel";
 	case ast::Type::Void:       return "Void";
 	case ast::Type::Error:      return "<error>";
 	}
@@ -47,7 +37,8 @@ inline bool isBoolCompatible(ast::Type t) {
 		|| t == ast::Type::Setting;
 }
 
-/// Parse a type annotation string (e.g. "Distance") to a Type enum value.
+/// Parse a built-in type annotation string (e.g. "Bool") to a Type enum value.
+/// Named enum annotations are resolved from the Project's enum registry.
 /// Returns nullopt if the annotation is not a recognized type name.
 inline std::optional<ast::Type> typeFromAnnotation(std::string_view annotation) {
 	struct Entry {
@@ -61,23 +52,32 @@ inline std::optional<ast::Type> typeFromAnnotation(std::string_view annotation) 
 		{"Callable",   ast::Type::Callable},
 		{"Condition",  ast::Type::Condition},
 		{"Enum",       ast::Type::Enum},
-		{"Item",       ast::Type::Item},
-		{"Enemy",      ast::Type::Enemy},
-		{"Distance",   ast::Type::Distance},
-		{"Trick",      ast::Type::Trick},
 		{"Setting",    ast::Type::Setting},
 		{"Region",     ast::Type::Region},
 		{"Check",      ast::Type::Check},
-		{"Logic",      ast::Type::Logic},
-		{"Scene",      ast::Type::Scene},
-		{"Dungeon",    ast::Type::Dungeon},
-		{"Area",       ast::Type::Area},
-		{"Trial",      ast::Type::Trial},
-		{"WaterLevel", ast::Type::WaterLevel},
 	};
 
 	for (const auto& [name, type] : table) {
 		if (annotation == name) return type;
+	}
+	return std::nullopt;
+}
+
+/// A resolved type annotation, including the identity of a named enum.
+struct ResolvedTypeAnnotation {
+	ast::Type type;
+	std::optional<std::string_view> enumName;
+};
+
+/// Resolve a type annotation against the built-in types and project enum names.
+inline std::optional<ResolvedTypeAnnotation> resolveTypeAnnotation(
+	const ast::Project& project, std::string_view annotation)
+{
+	if (auto type = typeFromAnnotation(annotation)) {
+		return ResolvedTypeAnnotation{*type, std::nullopt};
+	}
+	if (project.getEnumInfo(annotation) != nullptr) {
+		return ResolvedTypeAnnotation{ast::Type::Enum, annotation};
 	}
 	return std::nullopt;
 }

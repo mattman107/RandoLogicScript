@@ -24,25 +24,6 @@ std::optional<std::string_view> builtinEnumNamespace(std::string_view enumName) 
     return std::nullopt;
 }
 
-std::optional<std::string_view> enumNameFromBuiltinType(rls::ast::Type type) {
-    switch (type) {
-    case rls::ast::Type::Item: return "Item";
-    case rls::ast::Type::Enemy: return "Enemy";
-    case rls::ast::Type::Distance: return "Distance";
-    case rls::ast::Type::Trick: return "Trick";
-    case rls::ast::Type::Setting: return "Setting";
-    case rls::ast::Type::Region: return "Region";
-    case rls::ast::Type::Check: return "Check";
-    case rls::ast::Type::Logic: return "Logic";
-    case rls::ast::Type::Scene: return "Scene";
-    case rls::ast::Type::Dungeon: return "Dungeon";
-    case rls::ast::Type::Area: return "Area";
-    case rls::ast::Type::Trial: return "Trial";
-    case rls::ast::Type::WaterLevel: return "WaterLevel";
-    default: return std::nullopt;
-    }
-}
-
 std::optional<std::string_view> builtinEnumCppType(std::string_view enumName) {
     if (enumName == "Item") return "RandomizerGet";
     if (enumName == "Enemy") return "RandomizerEnemy";
@@ -67,22 +48,17 @@ std::optional<std::string> enumCppType(std::string_view enumName) {
     return std::string(enumName);
 }
 
+std::optional<std::string_view> sharedConceptEnumName(rls::ast::Type type) {
+    switch (type) {
+    case rls::ast::Type::Setting: return "Setting";
+    case rls::ast::Type::Region: return "Region";
+    case rls::ast::Type::Check: return "Check";
+    default: return std::nullopt;
+    }
+}
+
 bool isEnumLikeType(rls::ast::Type type) {
-    using T = rls::ast::Type;
-    return type == T::Enum
-        || type == T::Item
-        || type == T::Enemy
-        || type == T::Distance
-        || type == T::Trick
-        || type == T::Setting
-        || type == T::Region
-        || type == T::Check
-        || type == T::Logic
-        || type == T::Scene
-        || type == T::Dungeon
-        || type == T::Area
-        || type == T::Trial
-        || type == T::WaterLevel;
+    return type == rls::ast::Type::Enum;
 }
 
 std::string qualifyEnumValue(std::string_view enumName, std::string_view valueName) {
@@ -115,11 +91,9 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::Identifier& node) 
             return qualifyEnumValue(*enumName, node.name.text);
         }
 
-        // Fallback for any legacy enum value sites where enum identity wasn't recorded.
-        auto type = project.getType(&node);
-        if (type.has_value()) {
-            if (auto fallbackEnum = enumNameFromBuiltinType(*type); fallbackEnum.has_value()) {
-                return qualifyEnumValue(*fallbackEnum, node.name.text);
+        if (auto type = project.getType(&node); type.has_value()) {
+            if (auto conceptName = sharedConceptEnumName(*type); conceptName.has_value()) {
+                return qualifyEnumValue(*conceptName, node.name.text);
             }
         }
 
@@ -306,16 +280,8 @@ std::string SohTranspiler::GenerateCallArgument(
     }
 
     if (isEnumLikeType(paramType.value()) && argType.value() == rls::ast::Type::Int) {
-        auto targetCppType = paramEnumCppType;
-        if (!targetCppType.has_value() && paramType.value() != rls::ast::Type::Enum) {
-            auto enumName = enumNameFromBuiltinType(paramType.value());
-            if (enumName.has_value()) {
-                targetCppType = enumCppType(*enumName);
-            }
-        }
-
-        if (targetCppType.has_value()) {
-            return "static_cast<" + *targetCppType + ">(" + argCode + ")";
+        if (paramEnumCppType.has_value()) {
+            return "static_cast<" + *paramEnumCppType + ">(" + argCode + ")";
         }
     }
 

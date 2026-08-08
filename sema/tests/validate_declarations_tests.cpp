@@ -19,7 +19,11 @@ static std::pair<Project, std::vector<Diagnostic>> validateFromSource(
 	const std::string& source)
 {
 	Project project;
-	project.files.push_back(rls::parser::ParseString(source));
+	const std::string hostItemEnum = source.find("enum Item") == std::string::npos
+		? "extern enum Item { RG_* }\n"
+		: "";
+	project.files.push_back(rls::parser::ParseString(
+		hostItemEnum + "extern enum Distance { ED_* }\n" + source));
 	collectDeclarations(project);
 	resolveTypes(project);
 	auto diags = validateDeclarations(project);
@@ -332,7 +336,7 @@ TEST(ValidateDeclarations, EntryConditionNonBool) {
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("RC_POT"), std::string::npos);
 	EXPECT_NE(diags[0].message.find("Bool"), std::string::npos);
-	EXPECT_NE(diags[0].message.find("Item"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Enum"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, EntryConditionNonBoolInExtend) {
@@ -348,7 +352,7 @@ TEST(ValidateDeclarations, EntryConditionNonBoolInExtend) {
 		"}\n");
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("RC_POT"), std::string::npos);
-	EXPECT_NE(diags[0].message.find("Item"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Enum"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, EntryConditionNonBoolExit) {
@@ -604,7 +608,7 @@ TEST(ValidateDeclarations, ExternDefineTypedDefaultMismatch) {
 		"}\n");
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("default value for parameter 'distance'"), std::string::npos);
-	EXPECT_NE(diags[0].message.find("expected Distance"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("expected enum 'Distance'"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, DefineTypedDefaultMismatch) {
@@ -616,12 +620,27 @@ TEST(ValidateDeclarations, DefineTypedDefaultMismatch) {
 	for (const auto& d : diags) {
 		if (d.level != DiagnosticLevel::Error) continue;
 		if (d.message.find("default value for parameter 'distance'") != std::string::npos
-			&& d.message.find("expected Distance") != std::string::npos) {
+			&& d.message.find("expected enum 'Distance'") != std::string::npos) {
 			found = true;
 			break;
 		}
 	}
 	EXPECT_TRUE(found);
+}
+
+TEST(ValidateDeclarations, DefineEnumDefaultIdentityMismatch) {
+	auto [project, diags] = validateFromSource(
+		"enum Color { RED }\n"
+		"enum Status { ACTIVE }\n"
+		"define select(color: Color = Status.ACTIVE): true\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	auto error = std::find_if(diags.begin(), diags.end(), [](const Diagnostic& diagnostic) {
+		return diagnostic.level == DiagnosticLevel::Error;
+	});
+	ASSERT_NE(error, diags.end());
+	EXPECT_NE(error->message.find("has type enum 'Status'"), std::string::npos);
+	EXPECT_NE(error->message.find("expected enum 'Color'"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, ExternDefineDuplicateParameterName) {

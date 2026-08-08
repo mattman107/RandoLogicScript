@@ -95,20 +95,13 @@ extend region RR_SPIRIT_TEMPLE_FOYER {
 
 | Type         | Examples                                                                            | Notes                                                 |
 | ------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `Item`       | `RG_HOOKSHOT`, `RG_FAIRY_BOW`, `RG_BOMB_BAG`                                        | Maps directly to `RG_*` enum values.                  |
-| `Enemy`      | `RE_ARMOS`, `RE_GOLD_SKULLTULA`, `RE_IRON_KNUCKLE`                                  | Maps to `RE_*` enum.                                  |
-| `Distance`   | `ED_CLOSE`, `ED_BOMB_THROW`, `ED_BOOMERANG`, `ED_HOOKSHOT`, `ED_LONGSHOT`, `ED_FAR` | Maps to `ED_*` enum.                                  |
-| `Trick`      | `RT_SPIRIT_CHILD_CHU`, `RT_SPIRIT_WEST_LEDGE`                                       | Maps to `RT_*` enum.                                  |
-| `Setting`    | `RSK_SUNLIGHT_ARROWS`, `RSK_SHUFFLE_DUNGEON_ENTRANCES`                              | Maps to `RSK_*` / `RO_*`.                             |
-| `Region`     | `RR_SPIRIT_TEMPLE_FOYER`, `RR_SPIRIT_TEMPLE_STATUE_ROOM`                            | Maps to `RR_*` enum.                                  |
-| `Check`      | `RC_SPIRIT_TEMPLE_CHILD_BRIDGE_CHEST`                                               | Maps to `RC_*` enum.                                  |
-| `Logic`      | `LOGIC_FORWARDS_SPIRIT_CHILD`, `LOGIC_SPIRIT_PLATFORM_LOWERED`                      | Maps to `LOGIC_*` flags.                              |
-| `Scene`      | `SCENE_SPIRIT_TEMPLE`                                                               | Maps to `SceneID` enum.                               |
-| `Dungeon`    | `SPIRIT_TEMPLE`                                                                     | Maps to `DungeonKey` enum.                            |
-| `Area`       | `RA_CASTLE_GROUNDS`, `RA_HYRULE_FIELD`                                              | Maps to `RA_*` enum. Used in region `areas` property. |
-| `Trial`      | `TK_LIGHT_TRIAL`, `TK_FOREST_TRIAL`                                                 | Maps to `TK_*` enum. Used with `trial_skipped()`.     |
-| `WaterLevel` | `WL_HIGH`, `WL_LOW`, `WL_MID`                                                       | Maps to `WL_*` enum. Used with `water_level()`.       |
-| `Enum`       | `Color.RED`, `Status.ST_ACTIVE`, `EnemyDistance.ED_CLOSE`                           | User/extern enum values with enum identity tracking.   |
+| `bool`       | `true`, `false`, comparisons, logical expressions                                  | Boolean value.                                        |
+| `int`        | `0`, `3`, arithmetic expressions                                                    | Integer value.                                        |
+| `Condition`  | `has(RG_HOOKSHOT)`, a zero-argument callable                                        | Callable condition.                                   |
+| `Setting`    | `setting(...)` results and option values                                            | Cross-game configuration option.                       |
+| `Region`     | Region keys and `here`                                                              | Cross-game world region.                               |
+| `Check`      | Location/check keys                                                                 | Cross-game randomized check or location.               |
+| Enum name    | `Item`, `Distance`, `Color`, `EnemyDistance`                                        | A first-class enum type declared by `enum` or `extern enum`. |
 
 All names use the **same identifiers as the C++ enums**. This eliminates a mapping layer, makes cross-referencing trivial, and allows the transpiler to emit enum values directly. Names are validated at transpile time against the enum registry generated from `randomizerEnums.h`.
 
@@ -116,7 +109,7 @@ All names use the **same identifiers as the C++ enums**. This eliminates a mappi
 
 RLS does not require type annotations in most cases - the transpiler infers types at transpile time from context:
 
-1. **Enum identifiers are resolved in two stages.** Stage A resolves known enum members from builtin enums, normal enums, and extern enums (including wildcard-pattern matches). Stage B falls back to legacy prefix-based typing when Stage A has no match. If a bare identifier matches multiple enums, this is a hard error and requires dotted disambiguation (`EnumName.ValueName`).
+1. **Enum identifiers are resolved in two stages.** Stage A resolves known enum members from normal and extern enum declarations (including wildcard-pattern matches). Stage B recognizes only the shared `Setting`, `Region`, and `Check` concepts. If a bare identifier matches multiple enums, this is a hard error and requires dotted disambiguation (`EnumName.ValueName`).
 
 2. **Host-call signatures are declared with `extern define`.** For example, `extern define has(item: Item) -> bool`, `extern define keys(scene: Scene, n: int) -> int`, and `extern define trick(key: Trick) -> bool`. The transpiler validates arguments against these declared signatures.
 
@@ -156,7 +149,7 @@ extern enum Item {
 - Bare identifiers remain valid when unique. When ambiguous across multiple enums, use dotted syntax: `EnumName.ValueName`.
 - Dotted member expressions always resolve against the named enum and bypass bare-name ambiguity.
 
-Optional type annotations are available for documentation or when inference is ambiguous (e.g. a parameter only used in arithmetic):
+Enum names are first-class annotations, so an enum-typed parameter always carries its concrete identity. Optional annotations are also useful for documentation or when inference is ambiguous:
 
 ```rls
 define foo(d: Distance): can_hit_switch(d)

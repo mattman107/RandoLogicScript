@@ -45,6 +45,16 @@ inline void printDiagnostic(const rls::ast::Diagnostic& d) {
 
 inline std::string withHostExterns(const std::string& source) {
 	return
+		"extern enum Item { RG_* }\n"
+		"extern enum Enemy { RE_* }\n"
+		"extern enum Distance { ED_* }\n"
+		"extern enum Trick { RT_* }\n"
+		"extern enum Logic { LOGIC_* }\n"
+		"extern enum Scene { SCENE_* }\n"
+		"extern enum Dungeon { DUNGEON_* }\n"
+		"extern enum Area { RA_* }\n"
+		"extern enum Trial { TK_* }\n"
+		"extern enum WaterLevel { WL_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"extern define keys(sc: Scene, amount: Int) -> Bool\n"

@@ -24,29 +24,29 @@ static size_t countErrors(const std::vector<Diagnostic>& diags) {
 
 // == typeFromIdentifier (Step 1) ==============================================
 
-TEST(EnumPrefix, Item)       { EXPECT_EQ(typeFromIdentifier("RG_HOOKSHOT"), Type::Item); }
-TEST(EnumPrefix, Enemy)      { EXPECT_EQ(typeFromIdentifier("RE_ARMOS"), Type::Enemy); }
-TEST(EnumPrefix, Distance)   { EXPECT_EQ(typeFromIdentifier("ED_CLOSE"), Type::Distance); }
-TEST(EnumPrefix, Trick)      { EXPECT_EQ(typeFromIdentifier("RT_SPIRIT_CHILD_CHU"), Type::Trick); }
 TEST(EnumPrefix, SettingRSK) { EXPECT_EQ(typeFromIdentifier("RSK_SUNLIGHT_ARROWS"), Type::Setting); }
 TEST(EnumPrefix, SettingRO)  { EXPECT_EQ(typeFromIdentifier("RO_CLOSED_FOREST_ON"), Type::Setting); }
 TEST(EnumPrefix, Region)     { EXPECT_EQ(typeFromIdentifier("RR_SPIRIT_TEMPLE_FOYER"), Type::Region); }
 TEST(EnumPrefix, Check)      { EXPECT_EQ(typeFromIdentifier("RC_SPIRIT_TEMPLE_CHEST"), Type::Check); }
-TEST(EnumPrefix, Logic)      { EXPECT_EQ(typeFromIdentifier("LOGIC_SPIRIT_PLATFORM"), Type::Logic); }
-TEST(EnumPrefix, Scene)      { EXPECT_EQ(typeFromIdentifier("SCENE_SPIRIT_TEMPLE"), Type::Scene); }
-TEST(EnumPrefix, Dungeon)    { EXPECT_EQ(typeFromIdentifier("DUNGEON_SPIRIT"), Type::Dungeon); }
-TEST(EnumPrefix, Area)       { EXPECT_EQ(typeFromIdentifier("RA_CASTLE_GROUNDS"), Type::Area); }
-TEST(EnumPrefix, Trial)      { EXPECT_EQ(typeFromIdentifier("TK_LIGHT_TRIAL"), Type::Trial); }
-TEST(EnumPrefix, WaterLevel) { EXPECT_EQ(typeFromIdentifier("WL_HIGH"), Type::WaterLevel); }
 
 TEST(EnumPrefix, UnknownName) { EXPECT_FALSE(typeFromIdentifier("distance").has_value()); }
 TEST(EnumPrefix, EmptyString) { EXPECT_FALSE(typeFromIdentifier("").has_value()); }
-TEST(EnumPrefix, PrefixOnly)  { EXPECT_EQ(typeFromIdentifier("RG_"), Type::Item); }
+TEST(EnumPrefix, GameSpecificName) { EXPECT_FALSE(typeFromIdentifier("RG_HOOKSHOT").has_value()); }
 
 // == resolveTypes (Steps 2-3) =================================================
 
 static std::string withHostExterns(const std::string& source) {
 	return
+		"extern enum Item { RG_* }\n"
+		"extern enum Enemy { RE_* }\n"
+		"extern enum Distance { ED_* }\n"
+		"extern enum Trick { RT_* }\n"
+		"extern enum Logic { LOGIC_* }\n"
+		"extern enum Scene { SCENE_* }\n"
+		"extern enum Dungeon { DUNGEON_* }\n"
+		"extern enum Area { RA_* }\n"
+		"extern enum Trial { TK_* }\n"
+		"extern enum WaterLevel { WL_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"extern define keys(sc: Scene, amount: Int) -> Bool\n"
@@ -128,7 +128,7 @@ TEST(ResolveTypes, IdentifierEnum) {
 	const auto* expr = findRegionEntry(project);
 	ASSERT_NE(expr, nullptr);
 	ASSERT_TRUE(std::holds_alternative<Identifier>(expr->node));
-	EXPECT_EQ(project.getType(expr), Type::Item);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
 	auto enumType = project.getEnumType(expr);
 	ASSERT_TRUE(enumType.has_value());
 	EXPECT_EQ(*enumType, "Item");
@@ -230,7 +230,7 @@ TEST(ResolveTypes, EnumIdentifierStageBFallbackPrefix) {
 	EXPECT_TRUE(diags.empty());
 	const auto* expr = findRegionEntry(project);
 	ASSERT_NE(expr, nullptr);
-	EXPECT_EQ(project.getType(expr), Type::Item);
+	EXPECT_EQ(project.getType(expr), Type::Enum);
 	// Builtin prefix should still resolve correctly
 	auto enumType = project.getEnumType(expr);
 	ASSERT_TRUE(enumType.has_value());
@@ -454,7 +454,8 @@ TEST(ResolveTypes, EqualityTypeMismatch) {
 		"    locations { TEST_LOC: RG_HOOKSHOT == RE_ARMOS }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("incompatible types"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("comparison between enum 'Item' and enum 'Enemy'"),
+		std::string::npos);
 }
 
 TEST(ResolveTypes, OrderingInts) {
@@ -556,7 +557,7 @@ TEST(ResolveTypes, TernaryOk) {
 		"    locations { TEST_LOC: true ? ED_CLOSE : ED_FAR }\n"
 		"}\n");
 	EXPECT_TRUE(diags.empty());
-	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Distance);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Enum);
 }
 
 TEST(ResolveTypes, TernaryBranchMismatch) {
@@ -568,7 +569,8 @@ TEST(ResolveTypes, TernaryBranchMismatch) {
 		"    locations { TEST_LOC: true ? ED_CLOSE : RG_HOOKSHOT }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("different types"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("different enum types: 'Distance' and 'Item'"),
+		std::string::npos);
 }
 
 TEST(ResolveTypes, TernaryBoolCompatibleBranchesUnify) {
@@ -647,7 +649,7 @@ TEST(ResolveTypes, HostCallWrongArgType) {
 		"    locations { TEST_LOC: has(RE_ARMOS) }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("expected Item, got Enemy"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("expected enum 'Item', got enum 'Enemy'"), std::string::npos);
 	// Return type is still Bool.
 	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
 }
@@ -1068,7 +1070,7 @@ TEST(ResolveTypes, DefineCallArgTypeMismatch) {
 		"    locations { TEST_LOC: foo(RE_ARMOS) }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("argument 1 expected Item, got Enemy"),
+	EXPECT_NE(diags[0].message.find("argument 1 expected enum 'Item', got enum 'Enemy'"),
 		std::string::npos);
 }
 
@@ -1139,7 +1141,7 @@ TEST(ResolveTypes, DefineCallDefaultArgWrongType) {
 		"    locations { TEST_LOC: foo(RG_HOOKSHOT, true) }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("argument 2 expected Distance, got Bool"),
+	EXPECT_NE(diags[0].message.find("argument 2 expected Enum, got Bool"),
 		std::string::npos);
 }
 
@@ -1283,7 +1285,7 @@ TEST(ResolveTypes, DefineOrderingTransitive) {
 		"    locations { TEST_LOC: a() }\n"
 		"}\n");
 	EXPECT_TRUE(diags.empty());
-	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Item);
+	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Enum);
 }
 
 TEST(ResolveTypes, DefineOrderingIndependentDefines) {
@@ -1337,9 +1339,9 @@ TEST(ResolveTypes, DefineOrderingDefaultValueDep) {
 		"}\n");
 	EXPECT_TRUE(diags.empty());
 	auto* foo = project.DefineDecls.at("foo");
-	// foo's param x gets type Item from bar()'s return type.
-	EXPECT_EQ(project.getType(&foo->params[0]), Type::Item);
-	EXPECT_EQ(project.getType(foo->body.get()), Type::Item);
+	// foo's param x gets the Item enum type from bar()'s return type.
+	EXPECT_EQ(project.getType(&foo->params[0]), Type::Enum);
+	EXPECT_EQ(project.getType(foo->body.get()), Type::Enum);
 }
 
 // -- Any-age host function ----------------------------------------------------
@@ -1356,7 +1358,7 @@ TEST(ResolveTypes, AnyAgeCallBool) {
 }
 
 TEST(ResolveTypes, AnyAgeCallNonBoolArg) {
-	// any_age(RG_HOOKSHOT) — Item is not Condition-compatible.
+	// any_age(RG_HOOKSHOT) — an enum value is not Condition-compatible.
 	auto [project, diags] = resolveFromSource(
 		"region RR_TEST {\n"
 		"    name: \"Test\"\n"
@@ -1364,7 +1366,7 @@ TEST(ResolveTypes, AnyAgeCallNonBoolArg) {
 		"    locations { TEST_LOC: any_age(RG_HOOKSHOT) }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("argument 1 expected Condition, got Item"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("argument 1 expected Condition, got Enum"), std::string::npos);
 }
 
 // -- here keyword -------------------------------------------------------------
@@ -1441,7 +1443,7 @@ TEST(ResolveTypes, MatchPatternTypeMismatch) {
 		"        RG_HOOKSHOT: false\n"
 		"    }\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("match pattern 'RG_HOOKSHOT' is Item but expected Distance"),
+	EXPECT_NE(diags[0].message.find("match pattern 'RG_HOOKSHOT' is enum 'Item' but expected enum 'Distance'"),
 		std::string::npos);
 }
 
@@ -1523,7 +1525,7 @@ TEST(ResolveTypes, MatchArmsSameNonBoolType) {
 		"        ED_FAR: ED_CLOSE\n"
 		"    }\n");
 	EXPECT_TRUE(diags.empty());
-	EXPECT_EQ(project.getType(project.DefineDecls.at("test_fn")->body.get()), Type::Distance);
+	EXPECT_EQ(project.getType(project.DefineDecls.at("test_fn")->body.get()), Type::Enum);
 }
 
 TEST(ResolveTypes, MatchArmBodyTypeMismatch) {
@@ -1560,7 +1562,7 @@ TEST(ResolveTypes, MatchDiscriminantTypeMismatch) {
 		"    }\n");
 	EXPECT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find(
-		"match discriminant 'd' is Item but patterns are Distance"),
+		"match discriminant 'd' is enum 'Item' but patterns are enum 'Distance'"),
 		std::string::npos);
 }
 
@@ -1575,7 +1577,7 @@ TEST(ResolveTypes, MatchDiscriminantInferred) {
 	EXPECT_TRUE(diags.empty());
 	const auto* decl = project.DefineDecls.at("foo");
 	ASSERT_EQ(decl->params.size(), 1u);
-	EXPECT_EQ(project.getType(&decl->params[0]), Type::Distance);
+	EXPECT_EQ(project.getType(&decl->params[0]), Type::Enum);
 	EXPECT_EQ(project.getType(project.DefineDecls.at("foo")->body.get()), Type::Bool);
 }
 
@@ -1691,7 +1693,7 @@ TEST(ResolveTypes, SubExprTypesPopulated) {
 
 	// Arguments are Item.
 	auto& hasCall = std::get<CallExpr>(bin.left->node);
-	EXPECT_EQ(project.getType(hasCall.args[0].value.get()), Type::Item);
+	EXPECT_EQ(project.getType(hasCall.args[0].value.get()), Type::Enum);
 }
 
 // -- Setting comparison -------------------------------------------------------
@@ -1737,25 +1739,15 @@ TEST(ResolveTypes, CompositeExpression) {
 
 // -- typeFromAnnotation (Step 4) ----------------------------------------------
 
-TEST(TypeAnnotation, AllTypes) {
+TEST(TypeAnnotation, CoreTypes) {
 	EXPECT_EQ(typeFromAnnotation("Bool"),       Type::Bool);
 	EXPECT_EQ(typeFromAnnotation("Int"),        Type::Int);
 	EXPECT_EQ(typeFromAnnotation("Callable"),   Type::Callable);
 	EXPECT_EQ(typeFromAnnotation("Condition"),  Type::Condition);
 	EXPECT_EQ(typeFromAnnotation("Enum"),       Type::Enum);
-	EXPECT_EQ(typeFromAnnotation("Item"),       Type::Item);
-	EXPECT_EQ(typeFromAnnotation("Enemy"),      Type::Enemy);
-	EXPECT_EQ(typeFromAnnotation("Distance"),   Type::Distance);
-	EXPECT_EQ(typeFromAnnotation("Trick"),      Type::Trick);
 	EXPECT_EQ(typeFromAnnotation("Setting"),    Type::Setting);
 	EXPECT_EQ(typeFromAnnotation("Region"),     Type::Region);
 	EXPECT_EQ(typeFromAnnotation("Check"),      Type::Check);
-	EXPECT_EQ(typeFromAnnotation("Logic"),      Type::Logic);
-	EXPECT_EQ(typeFromAnnotation("Scene"),      Type::Scene);
-	EXPECT_EQ(typeFromAnnotation("Dungeon"),    Type::Dungeon);
-	EXPECT_EQ(typeFromAnnotation("Area"),       Type::Area);
-	EXPECT_EQ(typeFromAnnotation("Trial"),      Type::Trial);
-	EXPECT_EQ(typeFromAnnotation("WaterLevel"), Type::WaterLevel);
 }
 
 TEST(TypeAnnotation, Unknown) {
@@ -1774,8 +1766,24 @@ TEST(ResolveTypes, DefineParamWithAnnotation) {
 	const auto* body = project.DefineDecls.at("foo")->body.get();
 	ASSERT_NE(body, nullptr);
 	ASSERT_TRUE(std::holds_alternative<Identifier>(body->node));
-	EXPECT_EQ(project.getType(body), Type::Distance);
+	EXPECT_EQ(project.getType(body), Type::Enum);
+	EXPECT_EQ(project.getEnumType(body), "Distance");
 	EXPECT_EQ(std::get<Identifier>(body->node).kind, IdentifierKind::Parameter);
+}
+
+TEST(ResolveTypes, DefineParamWithProjectEnumAnnotation) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED, BLUE }\n"
+		"define select(color: Color): color\n");
+
+	EXPECT_TRUE(diags.empty());
+	const auto* decl = project.DefineDecls.at("select");
+	const auto* body = decl->body.get();
+	ASSERT_NE(body, nullptr);
+	EXPECT_EQ(project.getType(&decl->params[0]), Type::Enum);
+	EXPECT_EQ(project.getEnumType(&decl->params[0]), "Color");
+	EXPECT_EQ(project.getType(body), Type::Enum);
+	EXPECT_EQ(project.getEnumType(body), "Color");
 }
 
 TEST(ResolveTypes, DefineParamWithDefault) {
@@ -1783,7 +1791,7 @@ TEST(ResolveTypes, DefineParamWithDefault) {
 	auto [project, diags] = resolveFromSource(
 		"define foo(d = ED_CLOSE): d\n");
 	EXPECT_TRUE(diags.empty());
-	EXPECT_EQ(project.getType(project.DefineDecls.at("foo")->body.get()), Type::Distance);
+	EXPECT_EQ(project.getType(project.DefineDecls.at("foo")->body.get()), Type::Enum);
 }
 
 TEST(ResolveTypes, DefineParamUntyped) {

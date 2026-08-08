@@ -550,11 +550,12 @@ TEST(TypeTableTests, SetAndGetExprType) {
 TEST(TypeTableTests, SetAndGetParamType) {
 	Param param(Name("distance"), std::nullopt, makeExpr(Identifier{Name("ED_CLOSE")}));
 	Project project;
-	project.setType(&param, Type::Distance);
+	project.setType(&param, Type::Enum);
+	project.setEnumType(&param, "Distance");
 
 	auto result = project.getType(&param);
 	ASSERT_TRUE(result.has_value());
-	EXPECT_EQ(result.value(), Type::Distance);
+	EXPECT_EQ(result.value(), Type::Enum);
 }
 
 TEST(TypeTableTests, OverwriteType) {
@@ -574,11 +575,12 @@ TEST(TypeTableTests, DistinctExprsHaveDistinctTypes) {
 
 	project.setType(boolExpr.get(), Type::Bool);
 	project.setType(intExpr.get(), Type::Int);
-	project.setType(identExpr.get(), Type::Item);
+	project.setType(identExpr.get(), Type::Enum);
+	project.setEnumType(identExpr.get(), "Item");
 
 	EXPECT_EQ(project.getType(boolExpr.get()).value(), Type::Bool);
 	EXPECT_EQ(project.getType(intExpr.get()).value(), Type::Int);
-	EXPECT_EQ(project.getType(identExpr.get()).value(), Type::Item);
+	EXPECT_EQ(project.getType(identExpr.get()).value(), Type::Enum);
 }
 
 TEST(TypeTableTests, MixedExprAndParamKeys) {
@@ -587,10 +589,11 @@ TEST(TypeTableTests, MixedExprAndParamKeys) {
 	Param param(Name("scene"), std::make_optional<TypeRef>(Name("Scene")), nullptr);
 
 	project.setType(expr.get(), Type::Int);
-	project.setType(&param, Type::Scene);
+	project.setType(&param, Type::Enum);
+	project.setEnumType(&param, "Scene");
 
 	EXPECT_EQ(project.getType(expr.get()).value(), Type::Int);
-	EXPECT_EQ(project.getType(&param).value(), Type::Scene);
+	EXPECT_EQ(project.getType(&param).value(), Type::Enum);
 }
 
 TEST(TypeTableTests, UnknownPointerReturnsNullopt) {
@@ -622,8 +625,10 @@ TEST(TypeTableTests, PointerStabilityAfterProjectFilesGrow) {
 	const Param* paramPtr = &decl.params[0];
 	const Expr* bodyPtr = decl.body.get();
 
-	project.setType(paramPtr, Type::Distance);
-	project.setType(bodyPtr, Type::Distance);
+	project.setType(paramPtr, Type::Enum);
+	project.setEnumType(paramPtr, "Distance");
+	project.setType(bodyPtr, Type::Enum);
+	project.setEnumType(bodyPtr, "Distance");
 
 	// Add more files — vector may reallocate File storage, but
 	// the Decl/Param/Expr objects are heap-allocated and stable.
@@ -638,8 +643,8 @@ TEST(TypeTableTests, PointerStabilityAfterProjectFilesGrow) {
 	}
 
 	// Original pointers still resolve correctly.
-	EXPECT_EQ(project.getType(paramPtr).value(), Type::Distance);
-	EXPECT_EQ(project.getType(bodyPtr).value(), Type::Distance);
+	EXPECT_EQ(project.getType(paramPtr).value(), Type::Enum);
+	EXPECT_EQ(project.getType(bodyPtr).value(), Type::Enum);
 }
 
 // == Enum type side table ====================================================

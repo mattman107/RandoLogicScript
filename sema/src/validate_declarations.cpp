@@ -429,7 +429,24 @@ static void checkFunctionSignatures(
 				return actual == expected;
 			};
 
-			if (!isDefaultCompatible(*paramType, *defaultType)) {
+			bool defaultCompatible = isDefaultCompatible(*paramType, *defaultType);
+			if (defaultCompatible && *paramType == ast::Type::Enum
+				&& *defaultType == ast::Type::Enum) {
+				auto parameterEnum = project.getEnumType(&param);
+				auto defaultEnum = project.getEnumType(param.defaultValue.get());
+				defaultCompatible = !parameterEnum.has_value() || !defaultEnum.has_value()
+					|| *parameterEnum == *defaultEnum;
+			}
+
+			if (!defaultCompatible) {
+				auto typeDisplayName = [&](ast::Type type, const auto* node) {
+					if (type == ast::Type::Enum) {
+						if (auto enumName = project.getEnumType(node); enumName.has_value()) {
+							return std::format("enum '{}'", *enumName);
+						}
+					}
+					return std::string(typeName(type));
+				};
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format(
@@ -437,8 +454,8 @@ static void checkFunctionSignatures(
 						param.name.text,
 						kind,
 						name,
-						typeName(*defaultType),
-						typeName(*paramType)),
+						typeDisplayName(*defaultType, param.defaultValue.get()),
+						typeDisplayName(*paramType, &param)),
 					param.defaultValue->span
 				});
 			}
@@ -460,7 +477,7 @@ static void checkFunctionSignatures(
 			continue;
 		}
 
-		if (!typeFromAnnotation(decl->returnType->name.text)) {
+		if (!resolveTypeAnnotation(project, decl->returnType->name.text)) {
 			diags.push_back({
 				ast::DiagnosticLevel::Error,
 				std::format(

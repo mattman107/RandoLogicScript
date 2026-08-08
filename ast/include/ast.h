@@ -478,20 +478,10 @@ enum class Type {
 	// TODO: Implement parameterized callable syntax (e.g., (Item) -> Bool).
 	Callable,   // generic callable value
 	Condition,  // callable with signature () -> Bool
-	Enum,       // user-defined or host-defined enum value
-    Item,       // RG_*
-    Enemy,      // RE_*
-    Distance,   // ED_*
-    Trick,      // RT_*
-    Setting,    // RSK_* / RO_*
-    Region,     // RR_*
-    Check,      // RC_*
-    Logic,      // LOGIC_*
-    Scene,      // SCENE_*
-    Dungeon,    // DUNGEON_*
-    Area,       // RA_*
-    Trial,      // TK_*
-    WaterLevel, // WL_*
+	Enum,       // user-defined or host-defined enum value, identified by Project metadata
+	Setting,    // cross-game configuration option
+	Region,     // cross-game world region
+	Check,      // cross-game randomized check/location
     Void,       // statements / declarations with no value
     Error,      // poison type — inference failed, suppress cascading errors
 };
