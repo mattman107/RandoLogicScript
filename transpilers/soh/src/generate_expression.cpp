@@ -113,31 +113,62 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::UnaryExpr& node) c
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::BinaryExpr& node) const {
+    auto generateIntegerCompatibleOperand = [&](const rls::ast::ExprPtr& operand,
+                                                 int precedence,
+                                                 bool isRightChild = false) {
+        auto code = GenerateChildExpression(operand, precedence, isRightChild);
+        if (project.getType(operand.get()) == rls::ast::Type::Enum) {
+            return "static_cast<int>(" + code + ")";
+        }
+        return code;
+    };
+
+    const auto leftType = project.getType(node.left.get());
+    const auto rightType = project.getType(node.right.get());
+    const bool isMixedEnumInt = (leftType == rls::ast::Type::Enum && rightType == rls::ast::Type::Int)
+        || (leftType == rls::ast::Type::Int && rightType == rls::ast::Type::Enum);
+
     switch (node.op) {
     case rls::ast::BinaryOp::And:
         return GenerateChildExpression(node.left, 14) + " && " + GenerateChildExpression(node.right, 14, true);
     case rls::ast::BinaryOp::Or:
         return GenerateChildExpression(node.left, 15) + " || " + GenerateChildExpression(node.right, 15, true);
     case rls::ast::BinaryOp::Eq:
+        if (isMixedEnumInt) {
+            return generateIntegerCompatibleOperand(node.left, 10) + " == "
+                + generateIntegerCompatibleOperand(node.right, 10, true);
+        }
         return GenerateChildExpression(node.left, 10) + " == " + GenerateChildExpression(node.right, 10, true);
     case rls::ast::BinaryOp::NotEq:
+        if (isMixedEnumInt) {
+            return generateIntegerCompatibleOperand(node.left, 10) + " != "
+                + generateIntegerCompatibleOperand(node.right, 10, true);
+        }
         return GenerateChildExpression(node.left, 10) + " != " + GenerateChildExpression(node.right, 10, true);
     case rls::ast::BinaryOp::Lt:
-        return GenerateChildExpression(node.left, 9) + " < " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " < "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::LtEq:
-        return GenerateChildExpression(node.left, 9) + " <= " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " <= "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::Gt:
-        return GenerateChildExpression(node.left, 9) + " > " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " > "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::GtEq:
-        return GenerateChildExpression(node.left, 9) + " >= " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " >= "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::Add:
-        return GenerateChildExpression(node.left, 6) + " + " + GenerateChildExpression(node.right, 6, true);
+        return generateIntegerCompatibleOperand(node.left, 6) + " + "
+            + generateIntegerCompatibleOperand(node.right, 6, true);
     case rls::ast::BinaryOp::Sub:
-        return GenerateChildExpression(node.left, 6) + " - " + GenerateChildExpression(node.right, 6, true);
+        return generateIntegerCompatibleOperand(node.left, 6) + " - "
+            + generateIntegerCompatibleOperand(node.right, 6, true);
     case rls::ast::BinaryOp::Mul:
-        return GenerateChildExpression(node.left, 5) + " * " + GenerateChildExpression(node.right, 5, true);
+        return generateIntegerCompatibleOperand(node.left, 5) + " * "
+            + generateIntegerCompatibleOperand(node.right, 5, true);
     case rls::ast::BinaryOp::Div:
-        return GenerateChildExpression(node.left, 5) + " / " + GenerateChildExpression(node.right, 5, true);
+        return generateIntegerCompatibleOperand(node.left, 5) + " / "
+            + generateIntegerCompatibleOperand(node.right, 5, true);
     default:
         return "";
     }

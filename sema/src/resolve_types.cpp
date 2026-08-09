@@ -698,6 +698,12 @@ struct ExprResolver {
 			if (argTypes[argIndex] == T::Error
 				&& inferUntypedParamIdentifier(*node.args[argIndex].value, *paramType)) {
 				argTypes[argIndex] = *paramType;
+				if (*paramType == T::Enum && expectedEnum.has_value()) {
+					auto& argExpr = *node.args[argIndex].value;
+					auto& identifier = std::get<ast::Identifier>(argExpr.node);
+					enumScope[identifier.name.text] = std::string(*expectedEnum);
+					project.setEnumType(&argExpr, std::string(*expectedEnum));
+				}
 			}
 
 			if (argTypes[argIndex] == T::Error) continue;

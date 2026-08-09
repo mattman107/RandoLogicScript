@@ -686,6 +686,25 @@ TEST(ResolveTypes, DefineCallEnumParamIdentityMatchOk) {
 	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Bool);
 }
 
+TEST(ResolveTypes, UntypedForwardingParamInheritsEnumIdentity) {
+	auto [project, diags] = resolveFromSource(
+		"enum Color { RED }\n"
+		"define takes_color(c: Color):\n"
+		"    true\n"
+		"define forwards_color(value):\n"
+		"    takes_color(value)\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    locations { TEST_LOC: forwards_color(Color.RED) }\n"
+		"}\n");
+
+	EXPECT_TRUE(diags.empty());
+	const auto* decl = project.DefineDecls.at("forwards_color");
+	EXPECT_EQ(project.getType(&decl->params[0]), Type::Enum);
+	EXPECT_EQ(project.getEnumType(&decl->params[0]), "Color");
+}
+
 TEST(ResolveTypes, DefineCallEnumParamIdentityMismatchError) {
 	auto [project, diags] = resolveFromSource(
 		"enum Color { RED }\n"

@@ -48,7 +48,7 @@ template <typename T>
 std::string enumNodeType(const rls::ast::Project& p, const T* node) {
     auto enumType = p.getEnumType(node);
     if (!enumType.has_value()) {
-        return "unsupported_type";
+        return "int";
     }
 
     if (const auto* mapping = findHostEnumMapping(*enumType)) {

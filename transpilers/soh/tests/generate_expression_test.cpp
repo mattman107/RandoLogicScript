@@ -313,6 +313,27 @@ TEST(SohExpressions, BinaryArithmetic) {
 		"    8 / 2\n",
 		"test")),
 		"8 / 2");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED, GREEN }\n"
+		"define test():\n"
+		"    Color.RED + 1\n",
+		"test")),
+		"static_cast<int>(Color::RED) + 1");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED, GREEN }\n"
+		"define test():\n"
+		"    Color.RED < Color.GREEN\n",
+		"test")),
+		"static_cast<int>(Color::RED) < static_cast<int>(Color::GREEN)");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED, GREEN }\n"
+		"define test():\n"
+		"    Color.RED == 0\n",
+		"test")),
+		"static_cast<int>(Color::RED) == 0");
 }
 
 TEST(SohExpressions, TernarySimple) {
