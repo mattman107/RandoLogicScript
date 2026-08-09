@@ -147,7 +147,6 @@ inline void collectCallNames(
 			}
 		}
 		// Leaf nodes have no child expressions.
-		// have no child expressions.
 	}, expr.node);
 }
 

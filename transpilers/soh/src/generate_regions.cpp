@@ -169,7 +169,7 @@ std::vector<rls::ast::Diagnostic> SohTranspiler::Validate() const {
             if (entry == nullptr) {
                 addDataError(
                     diagnostics,
-                    "region '" + region->key.text + "' requires SoH data key '" + std::string(key) + "'",
+                    "region '" + regionName + "' requires SoH data key '" + std::string(key) + "'",
                     region->key.span);
             }
             return entry;
@@ -242,7 +242,11 @@ std::vector<rls::ast::Diagnostic> SohTranspiler::Validate() const {
 
 std::vector<rls::ast::Diagnostic> SohTranspiler::GenerateRegionsSource(rls::OutputWriter& out) const {
     auto diagnostics = Validate();
-    if (!diagnostics.empty()) {
+    bool hasErrors = false;
+    for (const auto& diagnostic : diagnostics) {
+        hasErrors = hasErrors || diagnostic.level == rls::ast::DiagnosticLevel::Error;
+    }
+    if (hasErrors) {
         return diagnostics;
     }
     WriteRegionsSource(out);
