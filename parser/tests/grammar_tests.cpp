@@ -243,14 +243,6 @@ TEST(LexKeyword, MatchExact) {
 	EXPECT_TRUE(matches<kw<kw_match>>("match"));
 }
 
-TEST(LexKeyword, TimePassesExact) {
-	EXPECT_TRUE(matches<kw<kw_time_passes>>("time_passes"));
-}
-
-TEST(LexKeyword, NoTimePassesExact) {
-	EXPECT_TRUE(matches<kw<kw_no_time_passes>>("no_time_passes"));
-}
-
 // == Punctuation ==============================================================
 
 TEST(LexPunctuation, OpenBrace) {
@@ -259,6 +251,14 @@ TEST(LexPunctuation, OpenBrace) {
 
 TEST(LexPunctuation, CloseBrace) {
 	EXPECT_TRUE(matches<close_brace>("}"));
+}
+
+TEST(LexPunctuation, OpenBracket) {
+	EXPECT_TRUE(matches<open_bracket>("["));
+}
+
+TEST(LexPunctuation, CloseBracket) {
+	EXPECT_TRUE(matches<close_bracket>("]"));
 }
 
 TEST(LexPunctuation, OpenParen) {
@@ -330,8 +330,6 @@ TEST(LexKeywordList, AllKeywordsRecognized) {
 	const std::string keywords[] = {
 		"region", "extend", "define",
 		"events", "locations", "exits",
-		"scene", "areas",
-		"time_passes", "no_time_passes",
 		"true", "false", "always", "never",
 		"and", "or", "not",
 		"is",
@@ -342,6 +340,19 @@ TEST(LexKeywordList, AllKeywordsRecognized) {
 	for (const auto& kw : keywords) {
 		EXPECT_TRUE(matches<reserved>(kw)) << "keyword '" << kw << "' not recognized";
 	}
+}
+
+TEST(LexIdentifier, RegionDataKeysAreNotReserved) {
+	EXPECT_TRUE(matches<ident>("name"));
+	EXPECT_TRUE(matches<ident>("scene"));
+	EXPECT_TRUE(matches<ident>("timePasses"));
+	EXPECT_TRUE(matches<ident>("areas"));
+}
+
+TEST(GrammarExpressions, StringAndListLiterals) {
+	EXPECT_TRUE(matches<expr>("\"test\\\" value\""));
+	EXPECT_TRUE(matches<expr>("[]"));
+	EXPECT_TRUE(matches<expr>("[AREA_A, [AREA_B]]"));
 }
 
 // Ensure identifiers are NOT matched by the reserved-word rule

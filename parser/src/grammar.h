@@ -100,13 +100,6 @@ struct kw_events : TAO_PEGTL_STRING("events") {};
 struct kw_locations : TAO_PEGTL_STRING("locations") {};
 struct kw_exits : TAO_PEGTL_STRING("exits") {};
 
-// Region properties
-struct kw_name : TAO_PEGTL_STRING("name") {};
-struct kw_scene : TAO_PEGTL_STRING("scene") {};
-struct kw_time_passes : TAO_PEGTL_STRING("time_passes") {};
-struct kw_no_time_passes : TAO_PEGTL_STRING("no_time_passes") {};
-struct kw_areas : TAO_PEGTL_STRING("areas") {};
-
 // Boolean literals and aliases
 struct kw_true : TAO_PEGTL_STRING("true") {};
 struct kw_false : TAO_PEGTL_STRING("false") {};
@@ -161,9 +154,6 @@ struct kw : seq<str, not_at<ident_other>> {};
 /// Listed longest-first where prefixes overlap (e.g. `no_time_passes`
 /// before `not`, `is_vanilla`/`is_mq`/`is_child`/`is_adult` before `is`).
 struct reserved : sor<
-	// Multi-word / long keywords first (prefix-safe ordering)
-	kw<kw_no_time_passes>,
-	kw<kw_time_passes>,
 	// Top-level declarations
 	kw<kw_region>,
 	kw<kw_extend>,
@@ -174,10 +164,6 @@ struct reserved : sor<
 	kw<kw_events>,
 	kw<kw_locations>,
 	kw<kw_exits>,
-	// Region properties
-	kw<kw_name>,
-	kw<kw_scene>,
-	kw<kw_areas>,
 	// Boolean literals and aliases
 	kw<kw_true>,
 	kw<kw_false>,
@@ -211,6 +197,8 @@ struct string_literal : seq<one<'"'>, star<string_char>, must<one<'"'>>> {};
 
 struct open_brace    : one<'{'> {};
 struct close_brace   : one<'}'> {};
+struct open_bracket  : one<'['> {};
+struct close_bracket : one<']'> {};
 struct open_paren    : one<'('> {};
 struct close_paren   : one<')'> {};
 struct colon         : one<':'> {};
@@ -247,6 +235,9 @@ struct op_slash : one<'/'> {};
 // Forward declaration — defined below after ternary.
 struct expr;
 
+/// List literal: `[value, ...]`.
+struct list_expr : seq<open_bracket, _, opt<list<expr, seq<_, comma, _>>>, _, close_bracket> {};
+
 // -- Atoms & primary expressions ----------------------------------------------
 
 /// Keyword atoms that evaluate to a value by themselves.
@@ -256,10 +247,10 @@ struct atom_keyword : sor<
 	kw<kw_here>          // resolves to the current region's name
 > {};
 
-/// atom = atom_keyword | IDENT | NUMBER
+/// atom = atom_keyword | STRING | IDENT | NUMBER
 /// (IDENT and NUMBER are tried last; call / match are
 /// handled separately by `primary` so they take priority.)
-struct atom : sor<atom_keyword, ident, integer> {};
+struct atom : sor<atom_keyword, string_literal, ident, integer> {};
 
 /// Named argument:  IDENT ":" expr
 struct named_arg : seq<ident, _, colon, _, expr> {};
@@ -304,14 +295,14 @@ struct match_expr;
 /// Parenthesised expression: "(" expr ")"
 struct paren_expr : seq<open_paren, must<_, expr, _, close_paren>> {};
 
-/// primary = invoke_call | call | member_access | match_expr | atom | "(" expr ")"
+/// primary = invoke_call | call | member_access | match_expr | list | atom | "(" expr ")"
 ///
 /// Ordering matters:
 ///   - `invoke_call` before `call` (both start with a call prefix)
 ///   - `call` before `member_access` and `atom` (all start with `ident`)
 ///   - `member_access` before `atom` (both start with `ident`)
 ///   - `match_expr` before `atom` (match starts with `kw_match` keyword)
-struct primary : sor<invoke_call, call, member_access, match_expr, paren_expr, atom> {};
+struct primary : sor<invoke_call, call, member_access, match_expr, list_expr, paren_expr, atom> {};
 
 // -- Unary / binary / ternary -------------------------------------------------
 
@@ -426,18 +417,11 @@ struct section : seq<section_kind, must<_, open_brace, _, star<seq<entry, _>>, c
 
 // -- Region -------------------------------------------------------------------
 
-/// region_props = "name:" STRING "scene:" IDENT ("time_passes" | "no_time_passes")? ("areas:" ident_list)?
-///
-/// Name and scene are required; time_passes variant and areas are optional.
-/// Order-sensitive: name first, then scene, time_passes variant, areas.
-struct name_prop       : seq<kw<kw_name>, must<_, colon, _, string_literal>> {};
-struct scene_prop      : seq<kw<kw_scene>, must<_, colon, _, ident>> {};
-struct time_prop       : sor<kw<kw_no_time_passes>, kw<kw_time_passes>> {};
-struct areas_prop      : seq<kw<kw_areas>, must<_, colon, _, ident_list>> {};
-struct region_props    : seq<name_prop, _, scene_prop, _, opt<seq<time_prop, _>>, opt<seq<areas_prop, _>>> {};
+/// region_data_entry = IDENT ":" expr
+struct region_data_entry : seq<ident, must<_, colon, _, expr>> {};
 
-/// region_body = region_props section*
-struct region_body : seq<region_props, star<seq<section, _>>> {};
+/// region_body = region_data_entry* section*
+struct region_body : seq<star<seq<region_data_entry, _>>, star<seq<section, _>>> {};
 
 /// region = "region" IDENT "{" region_body "}"
 struct region_decl : seq<kw<kw_region>, must<_, ident, _, open_brace, _, region_body, _, close_brace>> {};

@@ -1,8 +1,8 @@
 region RR_ROOT {
     name: "Root"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     events {
         LOGIC_KAKARIKO_GATE_OPEN:                  setting(RSK_KAK_GATE) is RO_KAK_GATE_OPEN
@@ -32,8 +32,8 @@ region RR_ROOT {
 region RR_ROOT_EXITS {
     name: "Root Exits"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_CHILD_SPAWN:             is_child()
@@ -50,8 +50,8 @@ region RR_ROOT_EXITS {
 region RR_CHILD_SPAWN {
     name: "Child Spawn"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_KF_LINKS_HOUSE: always
@@ -61,8 +61,8 @@ region RR_CHILD_SPAWN {
 region RR_ADULT_SPAWN {
     name: "Adult Spawn"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_TEMPLE_OF_TIME: always
@@ -72,8 +72,8 @@ region RR_ADULT_SPAWN {
 region RR_MINUET_OF_FOREST_WARP {
     name: "Minuet of Forest Warp"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_SACRED_FOREST_MEADOW: always
@@ -83,8 +83,8 @@ region RR_MINUET_OF_FOREST_WARP {
 region RR_BOLERO_OF_FIRE_WARP {
     name: "Bolero of Fire Warp"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_DMC_PAD_ENTRY: always
@@ -94,8 +94,8 @@ region RR_BOLERO_OF_FIRE_WARP {
 region RR_SERENADE_OF_WATER_WARP {
     name: "Serenade of Water Warp"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_LAKE_HYLIA: always
@@ -105,8 +105,8 @@ region RR_SERENADE_OF_WATER_WARP {
 region RR_REQUIEM_OF_SPIRIT_WARP {
     name: "Requiem of Spirit Warp"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_DESERT_COLOSSUS: always
@@ -116,8 +116,8 @@ region RR_REQUIEM_OF_SPIRIT_WARP {
 region RR_NOCTURNE_OF_SHADOW_WARP {
     name: "Nocturne of Shadow Warp"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_GRAVEYARD_WARP_PAD_REGION: always
@@ -127,8 +127,8 @@ region RR_NOCTURNE_OF_SHADOW_WARP {
 region RR_PRELUDE_OF_LIGHT_WARP {
     name: "Prelude of Light Warp"
     scene: SCENE_ID_MAX
-    no_time_passes
-    areas: RA_LINKS_POCKET
+    timePasses: TimePasses.No
+    areas: [RA_LINKS_POCKET]
 
     exits {
         RR_TEMPLE_OF_TIME: always

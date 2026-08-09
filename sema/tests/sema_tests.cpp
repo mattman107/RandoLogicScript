@@ -12,6 +12,18 @@ using namespace rls::sema;
 
 // == Helpers ==================================================================
 
+static RegionBody makeRegionBody(const std::string& scene) {
+	std::vector<RegionDataEntry> data;
+	data.emplace_back(Name("name"), makeExpr(StringLiteral{"Test"}));
+	data.emplace_back(Name("scene"), makeExpr(Identifier{Name(scene)}));
+	return RegionBody(std::move(data), {});
+}
+
+static std::string_view sceneName(const RegionDecl& region) {
+	const auto* scene = region.body.findData("scene");
+	return std::get<Identifier>(scene->value->node).name.view();
+}
+
 /// Build a minimal File containing a single RegionDecl.
 static File makeRegionFile(const std::string& path, const std::string& regionName,
                            const std::string& scene, Span span = {}) {
@@ -19,7 +31,7 @@ static File makeRegionFile(const std::string& path, const std::string& regionNam
 	f.path = path;
 	f.declarations.emplace_back(RegionDecl(
 		Name(regionName),
-		RegionBody("Test", Name(scene), TimePasses::Auto, {}, {}),
+		makeRegionBody(scene),
 		span
 	));
 	return f;
@@ -235,7 +247,7 @@ TEST(CollectDeclarations, MixedDeclsInOneFile) {
 	f.path = "mixed.rls";
 
 	f.declarations.emplace_back(RegionDecl(
-		Name("RR_TEST"), RegionBody("Test", Name("SCENE_TEST"), TimePasses::Auto, {}, {})
+		Name("RR_TEST"), makeRegionBody("SCENE_TEST")
 	));
 	f.declarations.emplace_back(DefineDecl(
 		Name("helper"), {}, makeExpr(BoolLiteral{true})
@@ -288,7 +300,7 @@ TEST(CollectDeclarations, DuplicateRegionError) {
 	EXPECT_NE(diags[0].message.find("duplicate region 'RR_TEST'"), std::string::npos);
 	// The first one wins
 	ASSERT_TRUE(project.RegionDecls.contains("RR_TEST"));
-	EXPECT_EQ(project.RegionDecls.at("RR_TEST")->body.scene.value(), "SCENE_A");
+	EXPECT_EQ(sceneName(*project.RegionDecls.at("RR_TEST")), "SCENE_A");
 }
 
 TEST(CollectDeclarations, DuplicateDefineError) {
@@ -353,10 +365,10 @@ TEST(CollectDeclarations, DuplicateRegionInSameFile) {
 	Span span1{"bad.rls", {1, 1}, {3, 1}};
 	Span span2{"bad.rls", {5, 1}, {7, 1}};
 	f.declarations.emplace_back(RegionDecl(
-		Name("RR_DUP"), RegionBody("Dup A", Name("SCENE_A"), TimePasses::Auto, {}, {}), span1
+		Name("RR_DUP"), makeRegionBody("SCENE_A"), span1
 	));
 	f.declarations.emplace_back(RegionDecl(
-		Name("RR_DUP"), RegionBody("Dup B", Name("SCENE_B"), TimePasses::Auto, {}, {}), span2
+		Name("RR_DUP"), makeRegionBody("SCENE_B"), span2
 	));
 	project.files.push_back(std::move(f));
 
@@ -364,7 +376,7 @@ TEST(CollectDeclarations, DuplicateRegionInSameFile) {
 
 	ASSERT_EQ(countErrors(diags), 1u);
 	// First wins
-	EXPECT_EQ(project.RegionDecls.at("RR_DUP")->body.scene.value(), "SCENE_A");
+	EXPECT_EQ(sceneName(*project.RegionDecls.at("RR_DUP")), "SCENE_A");
 }
 
 TEST(CollectDeclarations, MultipleDuplicateErrors) {
@@ -476,7 +488,7 @@ TEST(CollectDeclarations, ParsedRegion) {
 	ASSERT_EQ(project.RegionDecls.size(), 1u);
 	const auto* r = project.RegionDecls.at("RR_SPIRIT_TEMPLE_FOYER");
 	EXPECT_EQ(r->key, "RR_SPIRIT_TEMPLE_FOYER");
-	EXPECT_EQ(r->body.scene.value(), "SCENE_SPIRIT_TEMPLE");
+	EXPECT_EQ(sceneName(*r), "SCENE_SPIRIT_TEMPLE");
 	ASSERT_EQ(r->body.sections.size(), 1u);
 	EXPECT_EQ(r->body.sections[0].kind, SectionKind::Exits);
 }
@@ -634,7 +646,7 @@ TEST(CollectDeclarations, ParsedDuplicateRegionAcrossFiles) {
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("duplicate region 'RR_FOYER'"), std::string::npos);
 	// First declaration wins
-	EXPECT_EQ(project.RegionDecls.at("RR_FOYER")->body.scene.value(),
+	EXPECT_EQ(sceneName(*project.RegionDecls.at("RR_FOYER")),
 	          "SCENE_SPIRIT_TEMPLE");
 }
 
@@ -665,6 +677,7 @@ TEST(Analyze, PopulatesDeclMaps) {
 	Project project;
 	project.files.push_back(rls::parser::ParseString(
 		"extern enum Item { RG_* }\n"
+		"extern enum Scene { SCENE_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"region RR_FOYER {\n"
@@ -699,6 +712,7 @@ TEST(Analyze, PopulatesDeclMaps) {
 
 TEST(Analyze, ReturnsDiagnosticsFromAllPasses) {
 	Project project;
+	project.files.push_back(rls::parser::ParseString("extern enum Scene { SCENE_* }\n"));
 	project.files.push_back(makeRegionFile("a.rls", "RR_DUP", "SCENE_A"));
 	project.files.push_back(makeRegionFile("b.rls", "RR_DUP", "SCENE_B"));
 

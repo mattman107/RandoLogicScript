@@ -57,6 +57,18 @@ static size_t countWarnings(const std::vector<Diagnostic>& diags) {
 	return n;
 }
 
+TEST(ValidateDeclarations, DuplicateRegionDataKey) {
+	auto [project, diags] = validateFromSource(
+		"region RR_FOYER {\n"
+		"    name: \"First\"\n"
+		"    name: \"Second\"\n"
+		"}\n");
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_EQ(diags[0].message, "duplicate data key 'name' in region 'RR_FOYER'");
+	EXPECT_EQ(diags[0].span.start.line, 9u);
+	EXPECT_EQ(diags[0].span.start.column, 5u);
+}
+
 // == Extend-region target exists ==============================================
 
 TEST(ValidateDeclarations, ExtendRegionTargetExists_Ok) {

@@ -108,56 +108,38 @@ TEST(DeclSection, ExitsWithComplexExprs) {
 	));
 }
 
-// == Region properties ========================================================
+// == Region data ==============================================================
 
-TEST(DeclRegionProps, SceneOnly) {
-	EXPECT_TRUE(matches<region_props>("name: \"Test\"\nscene: SCENE_SPIRIT_TEMPLE"));
+TEST(DeclRegionData, StringValue) {
+	EXPECT_TRUE(matches<region_data_entry>("name: \"Test\""));
 }
 
-TEST(DeclRegionProps, MissingSceneFails) {
-	EXPECT_FALSE(matches<region_props>(""));
-	EXPECT_FALSE(matches<region_props>("time_passes"));
-	EXPECT_FALSE(matches<region_props>("areas: AREA_A"));
-	EXPECT_FALSE(matches<region_props>("scene: SCENE_SPIRIT_TEMPLE"));
+TEST(DeclRegionData, ExpressionValue) {
+	EXPECT_TRUE(matches<region_data_entry>("warpCost: 2 + 3"));
 }
 
-TEST(DeclRegionProps, TimePasses) {
-	EXPECT_TRUE(matches<region_props>("name: \"Test\"\nscene: SCENE_SPIRIT_TEMPLE\n  time_passes"));
+TEST(DeclRegionData, ListValue) {
+	EXPECT_TRUE(matches<region_data_entry>("areas: [AREA_A, AREA_B]"));
 }
 
-TEST(DeclRegionProps, NoTimePasses) {
-	EXPECT_TRUE(matches<region_props>("name: \"Test\"\nscene: SCENE_SPIRIT_TEMPLE\n  no_time_passes"));
-}
-
-TEST(DeclRegionProps, AreasOnly) {
-	EXPECT_TRUE(matches<region_props>("name: \"Test\"\nscene: SCENE_SPIRIT_TEMPLE\n  areas: AREA_SPIRIT_TEMPLE"));
-}
-
-TEST(DeclRegionProps, AreasMultiple) {
-	EXPECT_TRUE(matches<region_props>("name: \"Test\"\nscene: SCENE_SPIRIT_TEMPLE\n  areas: AREA_A, AREA_B, AREA_C"));
-}
-
-TEST(DeclRegionProps, SceneAndTimePasses) {
-	EXPECT_TRUE(matches<region_props>("name: \"Test\"\nscene: SCENE_SPIRIT_TEMPLE\n  time_passes"));
-}
-
-TEST(DeclRegionProps, AllThree) {
-	EXPECT_TRUE(matches<region_props>(
-		"name: \"Test\"\n"
-		"scene: SCENE_SPIRIT_TEMPLE\n"
-		"  time_passes\n"
-		"  areas: AREA_A, AREA_B"
-	));
+TEST(DeclRegionData, MissingValueFails) {
+	EXPECT_FALSE(matches<region_data_entry>("scene:"));
 }
 
 // == Region declaration =======================================================
 
 TEST(DeclRegion, Empty) {
-	EXPECT_TRUE(matches<region_decl>("region RR_TEST {\n  name: \"Test\"\n  scene: SCENE_TEST\n}"));
+	EXPECT_TRUE(matches<region_decl>("region RR_TEST {}"));
 }
 
-TEST(DeclRegion, MissingSceneFails) {
-	EXPECT_FALSE(matches<region_decl>("region RR_TEST {}"));
+TEST(DeclRegion, ArbitraryData) {
+	EXPECT_TRUE(matches<region_decl>(
+		"region RR_TEST {\n"
+		"  name: \"Test\"\n"
+		"  scene: SCENE_TEST\n"
+		"  gameSpecific: make_value(2)\n"
+		"}"
+	));
 }
 
 TEST(DeclRegion, WithScene) {
@@ -165,16 +147,6 @@ TEST(DeclRegion, WithScene) {
 		"region RR_SPIRIT_TEMPLE_FOYER {\n"
 		"  name: \"Spirit Temple Foyer\"\n"
 		"  scene: SCENE_SPIRIT_TEMPLE\n"
-		"}"
-	));
-}
-
-TEST(DeclRegion, WithSceneAndTimePasses) {
-	EXPECT_TRUE(matches<region_decl>(
-		"region RR_SPIRIT_TEMPLE_FOYER {\n"
-		"  name: \"Spirit Temple Foyer\"\n"
-		"  scene: SCENE_SPIRIT_TEMPLE\n"
-		"  time_passes\n"
 		"}"
 	));
 }
@@ -213,22 +185,20 @@ TEST(DeclRegion, MultipleSections) {
 	));
 }
 
-TEST(DeclRegion, NoTimePasses) {
-	EXPECT_TRUE(matches<region_decl>(
-		"region RR_TEST {\n"
-		"  name: \"Test\"\n"
-		"  scene: SCENE_TEST\n"
-		"  no_time_passes\n"
-		"}"
-	));
-}
-
 TEST(DeclRegion, WithAreas) {
 	EXPECT_TRUE(matches<region_decl>(
 		"region RR_TEST {\n"
 		"  name: \"Test\"\n"
 		"  scene: SCENE_FOO\n"
-		"  areas: AREA_A, AREA_B\n"
+		"  areas: [AREA_A, AREA_B]\n"
+		"}"
+	));
+}
+
+TEST(DeclRegion, LegacyTimePassesFails) {
+	EXPECT_FALSE(matches<region_decl>(
+		"region RR_TEST {\n"
+		"  time_passes\n"
 		"}"
 	));
 }

@@ -174,6 +174,17 @@ struct ExprResolver {
 		return ast::Type::Int;
 	}
 
+	ast::Type resolve(const ast::StringLiteral&, ast::Expr&) {
+		return ast::Type::String;
+	}
+
+	ast::Type resolve(const ast::ListExpr& node, ast::Expr&) {
+		for (const auto& element : node.elements) {
+			resolveExpr(*element);
+		}
+		return ast::Type::List;
+	}
+
 	ast::Type resolve(ast::Identifier& node, ast::Expr& expr) {
 		// Check scope first (parameter names).
 		if (auto it = scope.find(node.name.text); it != scope.end()) {
@@ -1238,6 +1249,10 @@ static void collectDefineCalls(
 				}
 				collectDefineCalls(*arm.body, defines, out);
 			}
+		} else if constexpr (std::is_same_v<N, ast::ListExpr>) {
+			for (const auto& element : node.elements) {
+				collectDefineCalls(*element, defines, out);
+			}
 		}
 	}, expr.node);
 }
@@ -1494,6 +1509,9 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			EnumIdentityScope regionEnumScope;
 			ExprResolver resolver{project, regionScope, regionEnumScope, diags};
 			resolver.currentRegion = decl->key;
+			for (auto& data : decl->body.data) {
+				resolver.resolveExpr(*data.value);
+			}
 			for (const auto& section : decl->body.sections) {
 				for (const auto& entry : section.entries) {
 					resolver.resolveExpr(*entry.condition);

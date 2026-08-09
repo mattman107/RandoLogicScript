@@ -17,6 +17,8 @@ inline std::string_view typeName(ast::Type t) {
 	switch (t) {
 	case ast::Type::Bool:       return "Bool";
 	case ast::Type::Int:        return "Int";
+	case ast::Type::String:     return "String";
+	case ast::Type::List:       return "List";
 	case ast::Type::Callable:   return "Callable";
 	case ast::Type::Condition:  return "Condition";
 	case ast::Type::Enum:       return "Enum";
@@ -45,6 +47,8 @@ inline std::optional<ast::Type> typeFromAnnotation(std::string_view annotation) 
 	static constexpr Entry table[] = {
 		{"Bool",       ast::Type::Bool},
 		{"Int",        ast::Type::Int},
+		{"String",     ast::Type::String},
+		{"List",       ast::Type::List},
 		{"Callable",   ast::Type::Callable},
 		{"Condition",  ast::Type::Condition},
 		{"Enum",       ast::Type::Enum},
@@ -137,8 +141,12 @@ inline void collectCallNames(
 			for (const auto& arm : node.arms) {
 				collectCallNames(*arm.body, out);
 			}
+		} else if constexpr (std::is_same_v<N, ast::ListExpr>) {
+			for (const auto& element : node.elements) {
+				collectCallNames(*element, out);
+			}
 		}
-		// Leaf nodes (BoolLiteral, IntLiteral, Identifier, KeywordExpr)
+		// Leaf nodes have no child expressions.
 		// have no child expressions.
 	}, expr.node);
 }

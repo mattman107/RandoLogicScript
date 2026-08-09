@@ -1,8 +1,74 @@
 #include "soh.h"
 
 #include <functional>
+#include <string>
+#include <string_view>
 
 namespace rls::transpilers::soh {
+
+namespace {
+
+enum class SohTimePasses { Auto, Yes, No };
+
+void addDataError(
+    std::vector<rls::ast::Diagnostic>& diagnostics,
+    std::string message,
+    const rls::ast::Span& span)
+{
+	diagnostics.push_back({
+		rls::ast::DiagnosticLevel::Error,
+		std::move(message),
+		span
+	});
+}
+
+bool hasEnumType(
+    const rls::ast::Project& project,
+    const rls::ast::Expr& value,
+    std::string_view enumName)
+{
+    const auto type = project.getType(&value);
+    const auto actualEnum = project.getEnumType(&value);
+	return type.has_value() && *type == rls::ast::Type::Enum
+		&& actualEnum.has_value() && *actualEnum == enumName;
+}
+
+std::string_view enumValueName(const rls::ast::Expr& expr) {
+	if (const auto* identifier = std::get_if<rls::ast::Identifier>(&expr.node)) {
+		return identifier->name.text;
+	}
+	if (const auto* member = std::get_if<rls::ast::MemberExpr>(&expr.node)) {
+		return member->member.text;
+	}
+	return {};
+}
+
+bool isTimePassesValue(const rls::ast::Expr& value)
+{
+    const auto name = enumValueName(value);
+	return name == "Auto" || name == "Yes" || name == "No";
+}
+
+std::string_view sohRegionEnumValue(const rls::ast::Expr& expr) {
+    return enumValueName(expr);
+}
+
+SohTimePasses getTimePasses(
+    const rls::ast::RegionDecl& region)
+{
+    const auto* entry = region.body.findData("timePasses");
+    if (entry == nullptr) {
+        return SohTimePasses::Auto;
+    }
+
+    const auto value = enumValueName(*entry->value);
+    if (value == "Auto") return SohTimePasses::Auto;
+    if (value == "Yes") return SohTimePasses::Yes;
+    if (value == "No") return SohTimePasses::No;
+	return SohTimePasses::Auto;
+}
+
+} // namespace
 
 void SohTranspiler::GenerateRegionsHeader(rls::OutputWriter& out) const {
     auto& header = out.open("regions.gen.h");
@@ -56,41 +122,134 @@ void WriteExits(
 
 void WriteRegionTimePasses(
     std::ostream& source,
-    const rls::ast::RegionBody& body)
+    std::string_view scene,
+    SohTimePasses timePasses)
 {
-    switch (body.timePasses) {
-    case rls::ast::TimePasses::Yes:
+    switch (timePasses) {
+    case SohTimePasses::Yes:
         source << "true";
         break;
-    case rls::ast::TimePasses::No:
+    case SohTimePasses::No:
         source << "false";
         break;
-    case rls::ast::TimePasses::Auto:
-        source << "GetTimePassFromScene(" << body.scene->text << ")";
+    case SohTimePasses::Auto:
+        source << "GetTimePassFromScene(" << scene << ")";
         break;
     }
 }
 
 void WriteRegionAreas(
     std::ostream& source,
-    const rls::ast::RegionBody& body)
+    const rls::ast::RegionDecl& region,
+    std::string_view scene)
 {
-    if (body.areas.empty()) {
-        source << "CalculateAreas(" << body.scene->text << ")";
+    const auto* entry = region.body.findData("areas");
+    if (entry == nullptr) {
+        source << "CalculateAreas(" << scene << ")";
         return;
     }
 
+	const auto& list = std::get<rls::ast::ListExpr>(entry->value->node);
+
     source << "{";
-    for (size_t i = 0; i < body.areas.size(); ++i) {
-        if (i > 0) {
+    for (size_t index = 0; index < list.elements.size(); ++index) {
+        if (index > 0) {
             source << ", ";
         }
-        source << body.areas[i].text;
+		source << sohRegionEnumValue(*list.elements[index]);
     }
     source << "}";
 }
 
-void SohTranspiler::GenerateRegionsSource(rls::OutputWriter& out) const {
+std::vector<rls::ast::Diagnostic> SohTranspiler::Validate() const {
+    std::vector<rls::ast::Diagnostic> diagnostics;
+    for (const auto& [regionName, region] : project.RegionDecls) {
+        const auto validateRequired = [&](std::string_view key) {
+            const auto* entry = region->body.findData(key);
+            if (entry == nullptr) {
+                addDataError(
+                    diagnostics,
+                    "region '" + region->key.text + "' requires SoH data key '" + std::string(key) + "'",
+                    region->key.span);
+            }
+            return entry;
+        };
+
+        const auto* name = validateRequired("name");
+        if (name != nullptr
+            && !std::holds_alternative<rls::ast::StringLiteral>(name->value->node)) {
+            addDataError(
+                diagnostics,
+                "region '" + region->key.text + "' data key 'name' must be a string literal",
+                name->value->span);
+        }
+
+        const auto* scene = validateRequired("scene");
+        if (scene != nullptr) {
+            if (!hasEnumType(project, *scene->value, "Scene")) {
+                addDataError(
+                    diagnostics,
+                    "region '" + region->key.text + "' data key 'scene' must be a Scene enum value",
+                    scene->value->span);
+            } else if (enumValueName(*scene->value).empty()) {
+                addDataError(
+                    diagnostics,
+                    "region '" + region->key.text + "' data key 'scene' must be a direct Scene enum value",
+                    scene->value->span);
+            }
+        }
+
+        if (const auto* timePasses = region->body.findData("timePasses"); timePasses != nullptr) {
+            if (!hasEnumType(project, *timePasses->value, "TimePasses")) {
+                addDataError(
+                    diagnostics,
+                    "region '" + region->key.text + "' data key 'timePasses' must be a TimePasses enum value",
+                    timePasses->value->span);
+            } else if (!isTimePassesValue(*timePasses->value)) {
+                addDataError(
+                    diagnostics,
+                    "region '" + region->key.text + "' data key 'timePasses' must be TimePasses.Auto, TimePasses.Yes, or TimePasses.No",
+                    timePasses->value->span);
+            }
+        }
+
+        if (const auto* areas = region->body.findData("areas"); areas != nullptr) {
+            const auto* list = std::get_if<rls::ast::ListExpr>(&areas->value->node);
+            if (list == nullptr) {
+                addDataError(
+                    diagnostics,
+                    "region '" + region->key.text + "' data key 'areas' must be a list of Area enum values",
+                    areas->value->span);
+            } else {
+                for (const auto& element : list->elements) {
+                    if (!hasEnumType(project, *element, "Area")) {
+                        addDataError(
+                            diagnostics,
+                            "region '" + region->key.text + "' data key 'areas' must contain only Area enum values",
+                            element->span);
+                    } else if (enumValueName(*element).empty()) {
+                        addDataError(
+                            diagnostics,
+                            "region '" + region->key.text + "' data key 'areas' must contain direct Area enum values",
+                            element->span);
+                    }
+                }
+            }
+        }
+    }
+    return diagnostics;
+}
+
+std::vector<rls::ast::Diagnostic> SohTranspiler::GenerateRegionsSource(rls::OutputWriter& out) const {
+    auto diagnostics = Validate();
+    if (!diagnostics.empty()) {
+        return diagnostics;
+    }
+    WriteRegionsSource(out);
+    return diagnostics;
+}
+
+void SohTranspiler::WriteRegionsSource(rls::OutputWriter& out) const {
     auto& source = out.open("regions.gen.cpp");
     source << "// Generated by RLS soh transpiler\n"
            << "#include \"regions.gen.h\"\n"
@@ -108,17 +267,23 @@ void SohTranspiler::GenerateRegionsSource(rls::OutputWriter& out) const {
             extendRegionDecls = extendRegionIt->second;
         }
 
-           source << "areaTable[" << region->key.text << "] = Region("
-               << "\"" << region->body.name << "\", "
-               << region->body.scene->text;
+        const auto* name = region->body.findData("name");
+        const auto* scene = region->body.findData("scene");
+		const auto timePasses = getTimePasses(*region);
+        const bool hasAreas = region->body.findData("areas") != nullptr;
+            const auto sceneValue = sohRegionEnumValue(*scene->value);
 
-         if (region->body.timePasses != rls::ast::TimePasses::Auto || !region->body.areas.empty()) {
-             source << ", ";
-             WriteRegionTimePasses(source, region->body);
-             source << ", ";
-             WriteRegionAreas(source, region->body);
-         }
-         source << ", ";
+        source << "areaTable[" << region->key.text << "] = Region("
+                   << GenerateExpression(name->value) << ", "
+    			   << sceneValue;
+
+        if (timePasses != SohTimePasses::Auto || hasAreas) {
+            source << ", ";
+    			WriteRegionTimePasses(source, sceneValue, timePasses);
+            source << ", ";
+                WriteRegionAreas(source, *region, sceneValue);
+        }
+        source << ", ";
         
         source << "{\n    // Events\n";
         WriteEvents(*this, source, region->body.sections);

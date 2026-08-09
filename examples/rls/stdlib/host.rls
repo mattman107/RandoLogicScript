@@ -11,6 +11,12 @@ extern enum Setting { RSK_*, RO_* }
 extern enum Region { RR_* }
 extern enum Check { RC_* }
 
+enum TimePasses {
+    Auto,
+    Yes,
+    No
+}
+
 extern define has(item: Item) -> Bool
 extern define can_use(item: Item) -> Bool
 extern define flag(key: Logic) -> Bool

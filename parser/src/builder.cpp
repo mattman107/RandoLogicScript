@@ -37,6 +37,24 @@ ast::Name makeName(const Node& n) {
 	return ast::Name(std::string(n.string_view()), makeSpan(n));
 }
 
+std::string unescapeStringLiteral(std::string_view raw) {
+	if (raw.size() >= 2) {
+		raw.remove_prefix(1);
+		raw.remove_suffix(1);
+	}
+
+	std::string unescaped;
+	unescaped.reserve(raw.size());
+	for (size_t index = 0; index < raw.size(); ++index) {
+		if (raw[index] == '\\' && index + 1 < raw.size()) {
+			unescaped += raw[++index];
+		} else {
+			unescaped += raw[index];
+		}
+	}
+	return unescaped;
+}
+
 // =============================================================================
 // Diagnostic helper
 // =============================================================================
@@ -152,6 +170,20 @@ ast::ExprPtr buildExpr(const Node& n, Diags& diags) {
 			return ast::makeExpr(ast::IntLiteral{0}, makeSpan(n));
 		}
 		return ast::makeExpr(ast::IntLiteral{value}, makeSpan(n));
+	}
+
+	if (n.is_type<grammar::string_literal>()) {
+		return ast::makeExpr(
+			ast::StringLiteral{unescapeStringLiteral(n.string_view())}, makeSpan(n));
+	}
+
+	if (n.is_type<grammar::list_expr>()) {
+		std::vector<ast::ExprPtr> elements;
+		elements.reserve(n.children.size());
+		for (const auto& child : n.children) {
+			elements.push_back(buildExpr(*child, diags));
+		}
+		return ast::makeExpr(ast::ListExpr(std::move(elements)), makeSpan(n));
 	}
 
 	// -- Unary ----------------------------------------------------------------
@@ -315,6 +347,11 @@ ast::Entry buildEntry(const Node& n, Diags& diags) {
 	return ast::Entry(std::move(name), buildExpr(*n.children[1], diags), makeSpan(n));
 }
 
+ast::RegionDataEntry buildRegionDataEntry(const Node& n, Diags& diags) {
+	return ast::RegionDataEntry(
+		makeName(*n.children[0]), buildExpr(*n.children[1], diags), makeSpan(n));
+}
+
 // =============================================================================
 // Section builder
 // =============================================================================
@@ -340,48 +377,16 @@ ast::Section buildSection(const Node& n, Diags& diags) {
 // =============================================================================
 
 ast::RegionDecl buildRegionDecl(const Node& n, Diags& diags) {
-	// children: [ident(key), name_prop, scene_prop, optional time_prop,
-	//            optional areas_prop, section, section, ...]
+	// children: [ident(key), region_data_entry, ..., section, ...]
 	auto key = makeName(*n.children[0]);
 
-	std::string name;
-	std::optional<ast::Name> scene;
-	ast::TimePasses timePasses = ast::TimePasses::Auto;
-	std::vector<ast::Name> areas;
+	std::vector<ast::RegionDataEntry> data;
 	std::vector<ast::Section> sections;
 
 	for (size_t i = 1; i < n.children.size(); ++i) {
 		const auto& child = *n.children[i];
-		if (child.is_type<grammar::name_prop>()) {
-			// name_prop children: [string_literal]
-			auto raw = child.children[0]->string_view();
-			// Strip surrounding quotes and process escape sequences
-			if (raw.size() >= 2) {
-				raw.remove_prefix(1);
-				raw.remove_suffix(1);
-			}
-			std::string unescaped;
-			unescaped.reserve(raw.size());
-			for (size_t j = 0; j < raw.size(); ++j) {
-				if (raw[j] == '\\' && j + 1 < raw.size()) {
-					unescaped += raw[++j];
-				} else {
-					unescaped += raw[j];
-				}
-			}
-			name = std::move(unescaped);
-		} else if (child.is_type<grammar::scene_prop>()) {
-			// scene_prop children: [ident(scene_name)]
-			scene = makeName(*child.children[0]);
-		} else if (child.is_type<grammar::time_prop>()) {
-			timePasses = (child.string_view() == "time_passes")
-				? ast::TimePasses::Yes
-				: ast::TimePasses::No;
-		} else if (child.is_type<grammar::areas_prop>()) {
-			// areas_prop children: [ident, ident, ...]
-			for (const auto& area : child.children) {
-				areas.emplace_back(makeName(*area));
-			}
+		if (child.is_type<grammar::region_data_entry>()) {
+			data.push_back(buildRegionDataEntry(child, diags));
 		} else if (child.is_type<grammar::section>()) {
 			sections.push_back(buildSection(child, diags));
 		}
@@ -389,8 +394,7 @@ ast::RegionDecl buildRegionDecl(const Node& n, Diags& diags) {
 
 	return ast::RegionDecl(
 		std::move(key),
-		ast::RegionBody(std::move(name), std::move(scene), timePasses,
-			std::move(areas), std::move(sections)),
+		ast::RegionBody(std::move(data), std::move(sections)),
 		makeSpan(n));
 }
 

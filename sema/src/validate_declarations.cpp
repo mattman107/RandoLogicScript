@@ -174,7 +174,25 @@ static void checkExtendRegionTargets(
 	}
 }
 
-/// Check 2: No duplicate entries across base region + all its extensions
+/// Check 2: Region data keys are unique within each region.
+static void checkDuplicateRegionData(
+	ast::Project& project, std::vector<ast::Diagnostic>& diags)
+{
+	for (const auto& [regionName, regionDecl] : project.RegionDecls) {
+		std::unordered_set<std::string> seen;
+		for (const auto& entry : regionDecl->body.data) {
+			if (!seen.insert(entry.key.text).second) {
+				diags.push_back({
+					ast::DiagnosticLevel::Error,
+					std::format("duplicate data key '{}' in region '{}'", entry.key.text, regionName),
+					entry.key.span
+				});
+			}
+		}
+	}
+}
+
+/// Check 3: No duplicate entries across base region + all its extensions
 ///           within the same SectionKind.
 static void checkDuplicateEntries(
 	ast::Project& project, std::vector<ast::Diagnostic>& diags)
@@ -494,6 +512,7 @@ std::vector<ast::Diagnostic> validateDeclarations(ast::Project& project) {
 	std::vector<ast::Diagnostic> diags;
 
 	checkExtendRegionTargets(project, diags);
+	checkDuplicateRegionData(project, diags);
 	checkDuplicateEntries(project, diags);
 	checkEntryConditionTypes(project, diags);
 	checkRegionReachability(project, diags);

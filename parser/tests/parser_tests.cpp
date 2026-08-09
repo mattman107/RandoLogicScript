@@ -142,7 +142,9 @@ TEST(ParserTests, ValidSourceReturnsFile) {
 		std::get_if<rls::ast::RegionDecl>(&file.declarations[0]);
 	ASSERT_NE(region, nullptr);
 	EXPECT_EQ(region->key, "RR_TEST");
-	EXPECT_EQ(region->body.scene, "SCENE_TEST");
+	const auto* scene = region->body.findData("scene");
+	ASSERT_NE(scene, nullptr);
+	EXPECT_EQ(std::get<rls::ast::Identifier>(scene->value->node).name, "SCENE_TEST");
 }
 
 TEST(ParserTests, WhitespaceOnlyReturnsEmpty) {
@@ -798,55 +800,45 @@ TEST(ParseRegion, MinimalRegion) {
 	EXPECT_EQ(region.key.span.start.line, 1u);
 	EXPECT_EQ(region.key.span.start.column, 8u);
 	EXPECT_EQ(region.key.span.end.column, 15u);
-	ASSERT_TRUE(region.body.scene.has_value());
-	EXPECT_EQ(*region.body.scene, "SCENE_TEST");
-	EXPECT_EQ(region.body.scene->span.start.column, 38u);
-	EXPECT_EQ(region.body.scene->span.end.column, 48u);
-	EXPECT_EQ(region.body.timePasses, TimePasses::Auto);
-	EXPECT_TRUE(region.body.areas.empty());
+	ASSERT_EQ(region.body.data.size(), 2u);
+	const auto* name = region.body.findData("name");
+	ASSERT_NE(name, nullptr);
+	EXPECT_EQ(std::get<StringLiteral>(name->value->node).value, "Test");
+	const auto* scene = region.body.findData("scene");
+	ASSERT_NE(scene, nullptr);
+	EXPECT_EQ(std::get<Identifier>(scene->value->node).name, "SCENE_TEST");
+	EXPECT_EQ(scene->key.span.start.column, 31u);
+	EXPECT_EQ(scene->key.span.end.column, 36u);
 	EXPECT_TRUE(region.body.sections.empty());
 }
 
-TEST(ParseRegion, WithTimePasses) {
+TEST(ParseRegion, ExpressionValuedData) {
 	const auto& decl = parseDecl(
 		"region RR_TEST {\n"
 		"  name: \"Test\"\n"
-		"  scene: SCENE_TEST\n"
-		"  time_passes\n"
+		"  warpCost: 2 + 3\n"
 		"}"
 	);
 	const auto& region = std::get<RegionDecl>(decl);
-	EXPECT_EQ(region.body.timePasses, TimePasses::Yes);
+	const auto* warpCost = region.body.findData("warpCost");
+	ASSERT_NE(warpCost, nullptr);
+	EXPECT_TRUE(std::holds_alternative<BinaryExpr>(warpCost->value->node));
 }
 
-TEST(ParseRegion, WithNoTimePasses) {
+TEST(ParseRegion, ListValuedData) {
 	const auto& decl = parseDecl(
 		"region RR_TEST {\n"
 		"  name: \"Test\"\n"
-		"  scene: SCENE_TEST\n"
-		"  no_time_passes\n"
+		"  areas: [AREA_A, AREA_B]\n"
 		"}"
 	);
 	const auto& region = std::get<RegionDecl>(decl);
-	EXPECT_EQ(region.body.timePasses, TimePasses::No);
-}
-
-TEST(ParseRegion, WithAreas) {
-	const auto& decl = parseDecl(
-		"region RR_TEST {\n"
-		"  name: \"Test\"\n"
-		"  scene: SCENE_TEST\n"
-		"  areas: AREA_A, AREA_B\n"
-		"}"
-	);
-	const auto& region = std::get<RegionDecl>(decl);
-	ASSERT_EQ(region.body.areas.size(), 2u);
-	EXPECT_EQ(region.body.areas[0], "AREA_A");
-	EXPECT_EQ(region.body.areas[1], "AREA_B");
-	EXPECT_EQ(region.body.areas[0].span.start.line, 4u);
-	EXPECT_EQ(region.body.areas[0].span.start.column, 10u);
-	EXPECT_EQ(region.body.areas[1].span.start.line, 4u);
-	EXPECT_EQ(region.body.areas[1].span.start.column, 18u);
+	const auto* areas = region.body.findData("areas");
+	ASSERT_NE(areas, nullptr);
+	const auto& list = std::get<ListExpr>(areas->value->node);
+	ASSERT_EQ(list.elements.size(), 2u);
+	EXPECT_EQ(std::get<Identifier>(list.elements[0]->node).name, "AREA_A");
+	EXPECT_EQ(std::get<Identifier>(list.elements[1]->node).name, "AREA_B");
 }
 
 TEST(ParseRegion, WithSections) {
@@ -913,8 +905,8 @@ TEST(ParseRegion, FullRegion) {
 		"region RR_SPIRIT_FOYER {\n"
 		"  name: \"Spirit Foyer\"\n"
 		"  scene: SCENE_SPIRIT_TEMPLE\n"
-		"  time_passes\n"
-		"  areas: AREA_SPIRIT_TEMPLE\n"
+		"  timePasses: TimePasses.Yes\n"
+		"  areas: [AREA_SPIRIT_TEMPLE]\n"
 		"  locations {\n"
 		"    RC_SPIRIT_LOBBY_POT: can_break_pots()\n"
 		"  }\n"
@@ -926,10 +918,9 @@ TEST(ParseRegion, FullRegion) {
 	);
 	const auto& region = std::get<RegionDecl>(decl);
 	EXPECT_EQ(region.key, "RR_SPIRIT_FOYER");
-	EXPECT_EQ(*region.body.scene, "SCENE_SPIRIT_TEMPLE");
-	EXPECT_EQ(region.body.timePasses, TimePasses::Yes);
-	ASSERT_EQ(region.body.areas.size(), 1u);
-	EXPECT_EQ(region.body.areas[0], "AREA_SPIRIT_TEMPLE");
+	ASSERT_NE(region.body.findData("scene"), nullptr);
+	ASSERT_NE(region.body.findData("timePasses"), nullptr);
+	ASSERT_NE(region.body.findData("areas"), nullptr);
 	ASSERT_EQ(region.body.sections.size(), 2u);
 	EXPECT_EQ(region.body.sections[0].entries.size(), 1u);
 	EXPECT_EQ(region.body.sections[1].entries.size(), 2u);
@@ -1093,7 +1084,7 @@ TEST(ParseRealistic, SpiritTempleExcerpt) {
 	ASSERT_EQ(file.declarations.size(), 1u);
 	const auto& region = std::get<RegionDecl>(file.declarations[0]);
 	EXPECT_EQ(region.key, "RR_SPIRIT_TEMPLE_FOYER");
-	EXPECT_EQ(*region.body.scene, "SCENE_SPIRIT_TEMPLE");
+	ASSERT_NE(region.body.findData("scene"), nullptr);
 	ASSERT_EQ(region.body.sections.size(), 2u);
 
 	const auto& locs = region.body.sections[0];
