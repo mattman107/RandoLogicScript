@@ -7,7 +7,6 @@ extern enum Scene { SCENE_* }
 extern enum Dungeon { DUNGEON_* }
 extern enum Area { RA_* }
 extern enum Trial { TK_* }
-extern enum WaterLevel { WL_* }
 extern enum Setting { RSK_*, RO_* }
 extern enum Region { RR_* }
 extern enum Check { RC_* }
@@ -33,3 +32,11 @@ extern define spirit_shared(
     first_region: Region, first_condition: Condition, any_age: Bool = false,
     second_region: Region = RR_NONE, second_condition: Condition = false,
     third_region: Region = RR_NONE, third_condition: Condition = false) -> Bool
+
+enum WaterLevel {
+    WL_LOW,
+    WL_MID,
+    WL_HIGH,
+    WL_LOW_OR_MID,
+    WL_HIGH_OR_MID
+}

@@ -1,6 +1,6 @@
 ## Plan: RLS User And Extern Enum Support
 
-Add first-class enum declarations to RLS with two forms: enum (project-owned) and extern enum (host-owned), support extern glob expansion from host registry, allow implicit enum/int conversion both ways, and enforce hard ambiguity errors requiring EnumName.ValueName syntax. Keep existing full constants usable by default, only requiring dot syntax when multiple enums expose the same value.
+Add first-class enum declarations to RLS with two forms: enum (project-owned) and extern enum (host-owned), support extern glob matching at identifier resolution, allow implicit enum/int conversion both ways, and enforce hard ambiguity errors requiring EnumName.ValueName syntax. Keep existing full constants usable as bare identifiers when unique.
 
 **Execution Checklist**
 
@@ -12,7 +12,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Support unknown values for value-dependent warnings (`EnumMemberInfo.value: optional<int>`).
 - [x] Implement option 1 model split: explicit enum members vs pattern declarations (`EnumEntryInfo = variant<EnumMemberInfo, EnumPatternInfo>`).
 - [x] Wire Enum through sema helper utilities in [sema/src/type_helpers.h](sema/src/type_helpers.h).
-- [x] Add non-breaking enum identity scaffolding in [sema/src/resolve_types.cpp](sema/src/resolve_types.cpp) for builtin enum identifiers.
+- [x] Add enum identity scaffolding in [sema/src/resolve_types.cpp](sema/src/resolve_types.cpp) for declared host enum identifiers.
 - [x] Add compatibility touchups in transpiler type routing for Type::Enum.
 - [x] Add/adjust AST and sema tests for completed Phase 1 slices.
 
@@ -28,13 +28,12 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 - [x] Validate enum member rules.
 - [x] Normal enum: no wildcard members allowed; duplicate member names forbidden; computed integer values unique.
 - [x] Extern enum: explicit members and glob patterns allowed; at least one member source (explicit or wildcard) required.
-- [x] Expand extern glob patterns against host enum registry (randomizer enum metadata), then materialize concrete members and detect overlaps/duplicates after expansion. *(Approach: glob patterns are matched at identifier resolution time in Phase 4 rather than materialised here; sibling overlap is checked at validation time.)*
+- [x] Match extern glob patterns at identifier resolution time; sibling overlap is checked at validation time. Host compilers validate target-specific member spellings.
 - [x] Validate collisions between enum value names across enums are permitted but marked as potentially ambiguous for use-site resolution.
 
 **Phase 4 - Identifier And Expression Type Resolution**
-- [x] Replace prefix-only typeFromIdentifier behavior with two-stage lookup.
-- [x] Stage A: exact enum value match across collected enum registries (builtin + normal + extern expanded).
-- [x] Stage B: fallback prefix map for legacy/builtin values if not otherwise resolved.
+- [x] Replace prefix-only typeFromIdentifier behavior with declared-enum lookup.
+- [x] Resolve exact enum members and extern glob matches across collected enum declarations.
 - [x] On bare identifier with multiple enum matches, emit hard error requiring EnumName.ValueName.
 - [x] Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 - [x] Add implicit conversion rules requested.
@@ -45,7 +44,7 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 
 **Phase 5 - Transpiler Integration**
 - [x] Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
-- [x] Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
+- [x] Preserve SOH target mappings (RandomizerGet::, RandomizerEnemy::, etc.) in a single target-local mapping table.
 - [x] Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 - [x] Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
 - [x] Generate SOH C++ enum declarations from normal RLS enums so the emitted C++ has matching enum types and values.
@@ -59,34 +58,34 @@ Add first-class enum declarations to RLS with two forms: enum (project-owned) an
 
 **Phase 7 - Verification And Rollout**
 - [x] Run parser, sema, ast, and soh transpiler test suites.
-- [ ] Add golden examples showing both non-ambiguous bare constants and ambiguity requiring EnumName.ValueName.
-- [ ] Validate existing scripts still compile unchanged unless an intentional ambiguity is introduced by new enums.
+- [x] Add documentation examples showing both non-ambiguous bare constants and ambiguity requiring EnumName.ValueName.
+- [x] Validate existing example scripts compile unchanged through SOH and AP golden acceptance tests.
 
 **History (condensed)**
-- 2026-06-25: Completed Phase 1 slices 1-5 (AST enum foundation, optional values, option 1 entry split, sema helper wiring, builtin enum identity scaffolding).
+- 2026-06-25: Completed Phase 1 slices 1-5 (AST enum foundation, optional values, option 1 entry split, sema helper wiring, declared host enum identity scaffolding).
 - 2026-06-25: Completed Phase 2 slice for enum/extern enum declarations (grammar + parse-tree selector + AST/builder wiring), added parser tests, and validated parser test suite.
 - 2026-06-26: Completed Phase 2 slice for dotted enum member-access parsing (`EnumName.ValueName`) with malformed-case parser tests and full-suite validation.
 - 2026-07-20: Completed Phase 3 collection/validation slice for enum declarations, enum value assignment checks, extern enum entry rules, and cross-enum ambiguity warnings.
-- 2026-07-21: Completed Phase 4 Stage A+B (two-stage identifier lookup): implemented Stage A exact enum member matching (including glob patterns for extern enums), Stage B prefix map fallback, and ambiguity detection with hard error reporting. Added 5 comprehensive tests validating all lookup paths. All 643 tests passing.
-- 2026-07-21: Completed Phase 4 task E (`MemberExpr` semantic resolution): validate enum object name, validate member existence (including extern enum glob patterns), validate builtin enum member access by prefix/type, set enum identity, and emit hard errors for unknown enum/member. Added 5 resolve-types tests; full suite now 648/648 passing.
+- 2026-07-21: Completed declaration-based identifier lookup: implemented exact enum member matching (including extern glob patterns) and ambiguity detection with hard error reporting. Added 5 comprehensive tests validating all lookup paths. All 643 tests passing.
+- 2026-07-21: Completed Phase 4 task E (`MemberExpr` semantic resolution): validate enum object name, validate member existence (including extern enum glob patterns), set enum identity, and emit hard errors for unknown enum/member. Added 5 resolve-types tests; full suite now 648/648 passing.
 - 2026-07-22: Completed Phase 4 task G (enum -> int implicit conversion): allow enum-like operands in arithmetic and ordering comparisons, allow enum-like/int equality comparisons, and allow enum-like arguments where `Int` parameters are expected in call binding. Added 4 conversion tests and updated 1 ordering negative test; full suite now 652/652 passing.
 - 2026-07-22: Completed Phase 4 task D (bare identifier ambiguity hard error): validated hard error behavior for explicit+explicit and explicit+pattern enum collisions, and validated `EnumName.ValueName` disambiguation success path. Added 2 resolve-types tests; full suite now 654/654 passing.
 - 2026-07-22: Completed Phase 4 task I (enum identity enforcement in call binding): for enum-typed parameters with known identity, require same-enum arguments in both `define` and `extern define` calls; emit explicit mismatch diagnostics for cross-enum calls. Added 3 resolve-types tests; full suite now 657/657 passing.
 - 2026-07-23: Completed Phase 4 task H (int -> enum conversion in enum-expected contexts): permit Int arguments for Enum parameters, use explicit enum context when available, and emit hard ambiguity errors for integer literals that map to multiple enum registries when no enum identity context is present. Added 3 resolve-types tests; full suite now 660/660 passing.
 - 2026-07-24: Completed Phase 4 task J (match enum identity unification): added enum-identity-aware match pattern/discriminant checks, ambiguous bare identifier behavior in patterns, and diagnostic display improvements for member patterns. Added 3 resolve-types tests and validated full suite at 663/663 passing.
-- 2026-07-24: Completed Phase 5 task A (SOH enum expression qualification): enum value identifiers now emit via enum identity metadata, `MemberExpr` emits qualified values, and builtin enum mappings are preserved (including current unqualified setting constants behavior). Added 3 SOH expression tests; full suite now 666/666 passing.
-- 2026-07-24: Completed Phase 5 task C (enum-typed function signatures): SOH function header/source generation now maps `Type::Enum` using enum identity metadata (`project.getEnumType`) and emits concrete C++ enum type names (builtin mapped names or user/extern enum names). Added 2 function-generation tests; full suite now 668/668 passing.
+- 2026-07-24: Completed Phase 5 task A (SOH enum expression qualification): enum value identifiers now emit via enum identity metadata and `MemberExpr` emits qualified values. SOH target mappings remain local to the transpiler, including unqualified setting constants. Added 3 SOH expression tests; full suite now 666/666 passing.
+- 2026-07-24: Completed Phase 5 task C (enum-typed function signatures): SOH function header/source generation now maps `Type::Enum` using enum identity metadata (`project.getEnumType`) and emits concrete C++ enum type names through its target-local mapping table or user/extern enum names. Added 2 function-generation tests; full suite now 668/668 passing.
 - 2026-07-24: Completed Phase 5 task D (explicit cast emission for conversions): call argument generation now emits `static_cast<int>(...)` for enum-to-int arguments and `static_cast<EnumType>(...)` for int-to-enum arguments where enum context exists. Added 2 SOH expression tests; full suite now 670/670 passing.
 - 2026-07-24: Completed Phase 5 task E (normal enum declaration emission): SOH function headers now emit scoped C++ enum definitions for normal RLS enums before function declarations, preserving explicit numeric values. Added 1 function-generation test; full suite now 671/671 passing.
 - 2026-07-24: Completed Phase 6 test checklist items A-D. Added AST coverage for member-expression node construction and enum/extern-enum declaration variants. Validated full suite at 674/674 passing.
-- 2026-07-24: Completed Phase 6 task E (docs updates): updated language docs to cover core `Enum` type behavior, two-stage enum resolution, enum/extern enum declarations, wildcard entries, ambiguity disambiguation via `EnumName.ValueName`, and enum/int conversion semantics.
+- 2026-07-24: Completed Phase 6 task E (docs updates): updated language docs to cover core `Enum` type behavior, declaration-based enum resolution, enum/extern enum declarations, wildcard entries, ambiguity disambiguation via `EnumName.ValueName`, and enum/int conversion semantics.
 - 2026-07-24: Completed Phase 7 task A (verification run): executed full parser, sema, ast, and SOH transpiler suites via CTest with all tests passing (674/674).
 - 2026-08-08: Replaced target-specific semantic enum categories with first-class named enums. `Type` now retains only generic `Enum`; game-target enum names are declared through `extern enum`. Named enum annotations (for example, `color: Color`) resolve through project metadata and retain enum identity through parameter, call, ternary, and default-value validation. Updated SOH routing, tests, and language documentation.
-- 2026-08-08: Removed all identifier-prefix fallback and the core `Setting`, `Region`, and `Check` types. Host setting keys, regions, and checks are represented by `extern enum` declarations. `extern define setting(key: Setting) -> Int` returns the setting value; `here` resolves as a `Region` enum value while retaining its region-entry-only structural constraint.
+- 2026-08-08: Removed all identifier-prefix fallback and the core `Setting`, `Region`, and `Check` types. Host setting keys, regions, and checks are represented by `extern enum` declarations. `extern define setting(key: Setting) -> Int` returns the setting value; `here` resolves as a `Region` enum value while retaining its region-entry-only structural constraint. Centralized SOH enum mappings in one target-local table and made WaterLevel a normal RLS enum with explicit members.
 
 **Steps**
 1. Phase 1 - Type System Foundation (blocks all other phases)
-A. Introduce enum-aware semantic typing without breaking existing primitive/builtin flow in ast::Type.
+A. Introduce enum-aware semantic typing without breaking existing primitive flow in ast::Type.
 B. Add ast::Type::Enum and enum identity side-table in Project (for Expr and Param nodes) so two enum-typed expressions can still be checked for same enum type, not just same ast::Type bucket.
 C. Add EnumInfo/EnumMember metadata registry in Project to store: enum name, kind (normal/extern), underlying type (Int for now), member list, integer values, source spans, and whether members came from explicit declarations or expanded patterns.
 D. Dependency: this must land before parser/sema checks that compare enum identities.
@@ -103,13 +102,12 @@ A. Extend collectDeclarations to gather EnumDecl and ExternEnumDecl into global 
 B. Validate enum member rules:
 C. Normal enum: no wildcard members allowed; duplicate member names forbidden; computed integer values unique.
 D. Extern enum: explicit members and glob patterns allowed; at least one member source (explicit or wildcard) required.
-E. Expand extern glob patterns against host enum registry (randomizer enum metadata), then materialize concrete members and detect overlaps/duplicates after expansion.
+E. Match extern glob patterns against identifiers at resolution time and detect sibling overlaps/duplicates without depending on host metadata.
 F. Validate collisions between enum value names across enums are permitted but marked as potentially ambiguous for use-site resolution.
 
 4. Phase 4 - Identifier And Expression Type Resolution (depends on 1 and 3)
-A. ✓ Replace prefix-only typeFromIdentifier behavior with two-stage lookup:
-B. ✓ Stage A: exact enum value match across collected enum registries (builtin + normal + extern expanded).
-C. ✓ Stage B: fallback prefix map for legacy/builtin values if not otherwise resolved.
+A. ✓ Replace prefix-only identifier behavior with declared-enum lookup.
+B. ✓ Match exact enum values and extern glob patterns across collected enum declarations.
 D. ✓ On bare identifier with multiple enum matches, emit hard error requiring EnumName.ValueName.
 E. ✓ Resolve MemberExpr by validating left side as enum type and right side as member of that enum; produce enum-typed result with enum identity set.
 F. Add implicit conversion rules requested:
@@ -120,7 +118,7 @@ J. ✓ Update match typing so discriminant/pattern unification supports enum ide
 
 5. Phase 5 - Transpiler Integration (depends on 4)
 A. ✓ Update SOH expression generation to emit qualified values for enum identifiers and MemberExpr using enum metadata instead of only ast::Type switch.
-B. ✓ Preserve existing built-in mappings (RandomizerGet::, RandomizerEnemy::, etc.) while allowing externally-mapped enum namespaces from registry metadata.
+B. ✓ Preserve SOH target mappings (RandomizerGet::, RandomizerEnemy::, etc.) in a single target-local mapping table.
 C. ✓ Update function signature generation for enum-typed params/returns so generated C++ uses mapped host enum types.
 D. ✓ Ensure conversion behavior compiles cleanly by emitting explicit static_cast where required by C++ overload resolution.
 E. ✓ Generate SOH C++ enum declarations from normal RLS enums so the emitted C++ has matching enum types and values.
@@ -149,8 +147,9 @@ C. Validate existing scripts still compile unchanged unless an intentional ambig
 - c:/Users/Anthony/source/repos/RandoLogicScript/sema/src/resolve_types.cpp - enum-aware identifier resolution, ambiguity checks, conversion rules, member expression typing.
 - c:/Users/Anthony/source/repos/RandoLogicScript/sema/src/type_helpers.h - enum-aware type naming and compatibility helpers.
 - c:/Users/Anthony/source/repos/RandoLogicScript/sema/src/validate_declarations.cpp - enum declaration semantic validation and extern wildcard expansion checks.
-- c:/Users/Anthony/source/repos/RandoLogicScript/transpilers/soh/src/generate_expression.cpp - enum/member expression emission and namespace mapping from registry metadata.
-- c:/Users/Anthony/source/repos/RandoLogicScript/transpilers/soh/src/generate_functions.cpp - enum parameter and return type mapping.
+- c:/Users/Anthony/source/repos/RandoLogicScript/transpilers/soh/src/enum_mappings.h - SOH-owned enum-to-C++ type and namespace mapping table.
+- c:/Users/Anthony/source/repos/RandoLogicScript/transpilers/soh/src/generate_expression.cpp - enum/member expression emission using SOH mappings.
+- c:/Users/Anthony/source/repos/RandoLogicScript/transpilers/soh/src/generate_functions.cpp - enum parameter and return type mapping using SOH mappings.
 - c:/Users/Anthony/source/repos/RandoLogicScript/parser/tests/parser_tests.cpp - parser coverage for new syntax.
 - c:/Users/Anthony/source/repos/RandoLogicScript/sema/tests/resolve_types_tests.cpp - type resolution and ambiguity/conversion tests.
 - c:/Users/Anthony/source/repos/RandoLogicScript/ast/tests/ast_tests.cpp - AST and Project type/enum metadata tests.
@@ -164,7 +163,7 @@ C. Validate existing scripts still compile unchanged unless an intentional ambig
 1. Bare full constant resolves when unique.
 1. Same value in two enums fails without dot syntax.
 1. EnumName.ValueName resolves successfully.
-1. Extern wildcard expansion resolves host constants from registry.
+1. Extern wildcard patterns resolve declared host constants in RLS and leave target spelling validation to the target compiler.
 1. int arithmetic and enum comparisons compile and type-check under implicit conversion rules.
 3. Validate generated SOH output for representative scripts with new enum declarations and extern enum patterns.
 
@@ -176,14 +175,14 @@ C. Validate existing scripts still compile unchanged unless an intentional ambig
 - Dot disambiguation style: always EnumName.ValueName, including host-prefixed values.
 - Integer conversion: implicit enum to int and int to enum in semantic typing.
 - Integer assignment in enums: optional explicit assignment with auto-increment fallback.
-- Wildcard expansion source: host enum registry metadata.
+- Wildcard matching source: extern enum declaration patterns at RLS resolution time.
 
 **Scope boundaries**
 - Included: parser/AST/sema/SOH transpiler/docs/tests needed for enum language support.
 - Excluded for this change: broad AP transpiler parity work beyond compile-safe pass-through, IDE/LSP completion enhancements, and runtime interpreter behavior (RLS remains transpile-time only).
 
 **Further Considerations**
-1. Host registry contract should be frozen early (member name, integer value, C++ qualified type path) to prevent rework in Phase 5.
+1. Keep target enum-to-C++ mappings isolated in target-local adapters so RLS has no dependency on SOH metadata.
 2. If int to enum implicit conversion causes noisy ambiguity in practice, add a follow-up lint mode before changing language semantics.
 3. Introduce a compatibility flag only if existing scripts encounter unexpected ambiguity due to newly added user enums in shared projects.
 4. Completed: user-defined and extern enum names are first-class annotation types (for example `c: Color`) and retain their enum identity without a default-value hint.

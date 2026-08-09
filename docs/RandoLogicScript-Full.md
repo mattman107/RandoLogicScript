@@ -100,7 +100,7 @@ extend region RR_SPIRIT_TEMPLE_FOYER {
 | `Condition`  | `has(RG_HOOKSHOT)`, a zero-argument callable                                        | Callable condition.                                   |
 | Enum name    | `Item`, `Setting`, `Region`, `Check`, `Distance`, `Color`, `EnemyDistance`          | A first-class enum type declared by `enum` or `extern enum`. |
 
-All names use the **same identifiers as the C++ enums**. This eliminates a mapping layer, makes cross-referencing trivial, and allows the transpiler to emit enum values directly. Names are validated at transpile time against the enum registry generated from `randomizerEnums.h`.
+Host enum names use the **same identifiers as their target-language enums**. This keeps generated references straightforward; RLS resolves only its declared enum members and patterns, while the target compiler validates host-specific spelling.
 
 ### 3.3 Type Inference
 
@@ -128,12 +128,6 @@ RLS does not require type annotations in most cases - the transpiler infers type
 RLS supports two enum declaration forms:
 
 ```rls
-enum Color {
-    RED,
-    GREEN = 3,
-    BLUE
-}
-
 extern enum Item {
     RG_HOOKSHOT,
     RG_*,
@@ -147,6 +141,14 @@ extern enum Setting {
 
 extern enum Region { RR_* }
 extern enum Check { RC_* }
+
+enum WaterLevel {
+    WL_LOW = 0,
+    WL_MID,
+    WL_HIGH,
+    WL_LOW_OR_MID,
+    WL_HIGH_OR_MID
+}
 ```
 
 - `enum` declares project-owned enums. Members can omit values (auto-increment) or specify explicit integer values.
@@ -969,7 +971,7 @@ The `extend region` mechanism allows shuffle features to add locations to region
 The migration will be done as **one large PR** rather than incrementally. This avoids the complexity of maintaining two parallel systems (hand-written and generated C++) and ensures the full logic graph is consistent when it lands.
 
 ### Phase 1 - Parser & C++ Solver Transpiler
-- Implement the RLS parser (lexer, AST, semantic analysis against enum registry).
+- Implement the RLS parser (lexer, AST, semantic analysis against declared enums).
 - Implement the C++ transpiler generating solver lambdas and region definitions.
 - Validate that transpiled output is structurally equivalent to the current hand-written code.
 
@@ -983,7 +985,7 @@ The migration will be done as **one large PR** rather than incrementally. This a
 ### Phase 3 - Archipelago Python Target
 - Implement the Python transpiler producing Archipelago `World` code.
 - Generate Python helper functions mirroring the C++ `Logic` class methods, integrating with the existing `LogicHelpers` module pattern (see §6.2).
-- Generate `item_name_to_id` and `location_name_to_id` from the enum registry.
+- Generate target-specific item and location ID tables from the target integration.
 - Validate against existing Archipelago OoT integration tests.
 
 ### Phase 4 - Full Conversion

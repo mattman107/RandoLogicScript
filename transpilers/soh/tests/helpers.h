@@ -54,7 +54,6 @@ inline std::string withHostExterns(const std::string& source) {
 		"extern enum Dungeon { DUNGEON_* }\n"
 		"extern enum Area { RA_* }\n"
 		"extern enum Trial { TK_* }\n"
-		"extern enum WaterLevel { WL_* }\n"
 		"extern enum Setting { RSK_*, RO_* }\n"
 		"extern enum Region { RR_* }\n"
 		"extern enum Check { RC_* }\n"

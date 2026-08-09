@@ -35,7 +35,6 @@ static std::string withHostExterns(const std::string& source) {
 		"extern enum Dungeon { DUNGEON_* }\n"
 		"extern enum Area { RA_* }\n"
 		"extern enum Trial { TK_* }\n"
-		"extern enum WaterLevel { WL_* }\n"
 		"extern enum Setting { RSK_*, RO_* }\n"
 		"extern enum Region { RR_* }\n"
 		"extern enum Check { RC_* }\n"
@@ -1147,7 +1146,7 @@ TEST(ResolveTypes, DefineCallDefaultArgWrongType) {
 		"    locations { TEST_LOC: foo(RG_HOOKSHOT, true) }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("argument 2 expected Enum, got Bool"),
+	EXPECT_NE(diags[0].message.find("argument 2 expected enum 'Distance', got Bool"),
 		std::string::npos);
 }
 
@@ -1427,7 +1426,20 @@ TEST(ResolveTypes, HereOutsideRegionIsError) {
 		"extern define uses_region(r: Region) -> Bool\n"
 		"define test(): uses_region(here)\n");
 	EXPECT_EQ(countErrors(diags), 1u);
-	EXPECT_NE(diags[0].message.find("'here' can only be used"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("resolves to enum 'Region'"), std::string::npos);
+}
+
+TEST(ResolveTypes, RegionParameterDiagnosticUsesEnumIdentity) {
+	auto [project, diags] = resolveFromSource(
+		"extern define uses_region(r: Region) -> Bool\n"
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    scene: SCENE_TEST\n"
+		"    exits { RR_OTHER: uses_region(true) }\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("expected enum 'Region', got Bool"), std::string::npos);
 }
 
 // -- Match expression ---------------------------------------------------------

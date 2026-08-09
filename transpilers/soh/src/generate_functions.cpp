@@ -1,4 +1,5 @@
 #include "soh.h"
+#include "enum_mappings.h"
 
 #include <sstream>
 
@@ -7,23 +8,6 @@ using AT = rls::ast::Type;
 namespace rls::transpilers::soh {
 
 namespace {
-
-std::optional<std::string_view> builtinEnumCppType(std::string_view enumName) {
-    if (enumName == "Item") return "RandomizerGet";
-    if (enumName == "Enemy") return "RandomizerEnemy";
-    if (enumName == "Distance") return "EnemyDistance";
-    if (enumName == "Trick") return "RandomizerTrick";
-    if (enumName == "Setting") return "RandomizerSettingKey";
-    if (enumName == "Region") return "RandomizerRegion";
-    if (enumName == "Check") return "RandomizerCheck";
-    if (enumName == "Logic") return "LogicVal";
-    if (enumName == "Scene") return "SceneID";
-    if (enumName == "Dungeon") return "DungeonKey";
-    if (enumName == "Area") return "RandomizerArea";
-    if (enumName == "Trial") return "TrialKey";
-    if (enumName == "WaterLevel") return "RandoWaterLevel";
-    return std::nullopt;
-}
 
 void writeEnumDeclarations(std::ostream& out, const rls::ast::Project& project) {
     for (const auto& [enumName, info] : project.EnumInfos) {
@@ -67,8 +51,8 @@ std::string enumNodeType(const rls::ast::Project& p, const T* node) {
         return "unsupported_type";
     }
 
-    if (auto builtinType = builtinEnumCppType(*enumType); builtinType.has_value()) {
-        return std::string(*builtinType);
+    if (const auto* mapping = findHostEnumMapping(*enumType)) {
+        return std::string(mapping->cppType);
     }
 
     // User/extern enums currently map directly to their enum name.

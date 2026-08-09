@@ -126,6 +126,16 @@ TEST(SohExpressions, ExternEnumIdentifierUsesEnumMetadataNamespace) {
 		"Status::ST_ACTIVE");
 }
 
+TEST(SohExpressions, NormalWaterLevelUsesGeneratedNamespace) {
+	auto expr = sourceToExpression(
+		"enum WaterLevel { WL_LOW, WL_MID, WL_HIGH, WL_LOW_OR_MID, WL_HIGH_OR_MID }\n"
+		"define test():\n"
+		"    WL_HIGH\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"WaterLevel::WL_HIGH");
+}
+
 TEST(SohExpressions, MemberExprUsesQualifiedEnumNamespace) {
 	auto expr = sourceToExpression(
 		"enum Color { RED }\n"

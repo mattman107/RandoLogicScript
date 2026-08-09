@@ -1,49 +1,16 @@
 #include "soh.h"
+#include "enum_mappings.h"
 
 #include <optional>
 #include <sstream>
-#include <unordered_map>
 
 namespace rls::transpilers::soh {
 
 namespace {
 
-std::optional<std::string_view> builtinEnumNamespace(std::string_view enumName) {
-    if (enumName == "Item") return "RandomizerGet";
-    if (enumName == "Enemy") return "RandomizerEnemy";
-    if (enumName == "Distance") return "EnemyDistance";
-    if (enumName == "Trick") return "RandomizerTrick";
-    if (enumName == "Region") return "RandomizerRegion";
-    if (enumName == "Check") return "RandomizerCheck";
-    if (enumName == "Logic") return "LogicVal";
-    if (enumName == "Scene") return "SceneID";
-    if (enumName == "Dungeon") return "DungeonKey";
-    if (enumName == "Area") return "RandomizerArea";
-    if (enumName == "Trial") return "TrialKey";
-    if (enumName == "WaterLevel") return "RandoWaterLevel";
-    return std::nullopt;
-}
-
-std::optional<std::string_view> builtinEnumCppType(std::string_view enumName) {
-    if (enumName == "Item") return "RandomizerGet";
-    if (enumName == "Enemy") return "RandomizerEnemy";
-    if (enumName == "Distance") return "EnemyDistance";
-    if (enumName == "Trick") return "RandomizerTrick";
-    if (enumName == "Setting") return "RandomizerSettingKey";
-    if (enumName == "Region") return "RandomizerRegion";
-    if (enumName == "Check") return "RandomizerCheck";
-    if (enumName == "Logic") return "LogicVal";
-    if (enumName == "Scene") return "SceneID";
-    if (enumName == "Dungeon") return "DungeonKey";
-    if (enumName == "Area") return "RandomizerArea";
-    if (enumName == "Trial") return "TrialKey";
-    if (enumName == "WaterLevel") return "RandoWaterLevel";
-    return std::nullopt;
-}
-
-std::optional<std::string> enumCppType(std::string_view enumName) {
-    if (auto builtinType = builtinEnumCppType(enumName); builtinType.has_value()) {
-        return std::string(*builtinType);
+std::string enumCppType(std::string_view enumName) {
+    if (const auto* mapping = findHostEnumMapping(enumName)) {
+        return std::string(mapping->cppType);
     }
     return std::string(enumName);
 }
@@ -53,16 +20,12 @@ bool isEnumLikeType(rls::ast::Type type) {
 }
 
 std::string qualifyEnumValue(std::string_view enumName, std::string_view valueName) {
-    if (enumName == "Setting") {
-        // Keep existing unqualified setting constant behavior until registry-level
-        // RO_/RSK_ namespace mapping is available.
+    if (const auto* mapping = findHostEnumMapping(enumName)) {
+        if (!mapping->cppValueNamespace.empty()) {
+            return std::string(mapping->cppValueNamespace) + "::" + std::string(valueName);
+        }
         return std::string(valueName);
     }
-
-    if (auto ns = builtinEnumNamespace(enumName); ns.has_value()) {
-        return std::string(*ns) + "::" + std::string(valueName);
-    }
-
     return std::string(enumName) + "::" + std::string(valueName);
 }
 

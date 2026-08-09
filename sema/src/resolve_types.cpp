@@ -691,6 +691,9 @@ struct ExprResolver {
 			size_t paramIndex = *binding.argToParam[argIndex];
 			auto paramType = getParamType(paramIndex);
 			if (!paramType) continue;
+			auto expectedEnum = *paramType == T::Enum
+				? getParamEnumType(paramIndex)
+				: std::optional<std::string_view>{};
 
 			if (argTypes[argIndex] == T::Error
 				&& inferUntypedParamIdentifier(*node.args[argIndex].value, *paramType)) {
@@ -701,8 +704,6 @@ struct ExprResolver {
 
 			// For Enum-typed parameters with known identity, require the same enum.
 			if (*paramType == T::Enum) {
-				auto expectedEnum = getParamEnumType(paramIndex);
-
 				// Explicit int-conversion path for enum parameters.
 				if (argTypes[argIndex] == T::Int) {
 					if (expectedEnum.has_value()) {
@@ -750,12 +751,14 @@ struct ExprResolver {
 			}
 
 			if (isCallArgCompatible(*paramType, argTypes[argIndex])) continue;
+			auto expectedName = expectedEnum.has_value()
+				? std::format("enum '{}'", *expectedEnum)
+				: std::string(typeName(*paramType));
 
 			diags.push_back({
 				ast::DiagnosticLevel::Error,
 				std::format("'{}' argument {} expected {}, got {}",
-					function, argIndex + 1,
-					typeName(*paramType), typeName(argTypes[argIndex])),
+					function, argIndex + 1, expectedName, typeName(argTypes[argIndex])),
 				node.args[argIndex].value->span
 			});
 		}
@@ -990,7 +993,7 @@ struct ExprResolver {
 		if (!currentRegion.has_value()) {
 			diags.push_back({
 				ast::DiagnosticLevel::Error,
-				"'here' can only be used inside a region entry condition",
+				"'here' can only be used inside a region entry condition; it resolves to enum 'Region'",
 				expr.span
 			});
 			return T::Error;
