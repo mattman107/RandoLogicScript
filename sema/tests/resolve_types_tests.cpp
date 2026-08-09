@@ -84,6 +84,16 @@ static const Expr* findRegionEntry(const Project& project,
 	return sections[0].entries[0].condition.get();
 }
 
+static const Expr* findRegionData(
+	const Project& project, std::string_view key,
+	const std::string& regionName = "RR_TEST")
+{
+	auto it = project.RegionDecls.find(regionName);
+	if (it == project.RegionDecls.end()) return nullptr;
+	const auto* data = it->second->body.findData(key);
+	return data ? data->value.get() : nullptr;
+}
+
 // -- Leaf types ---------------------------------------------------------------
 
 TEST(ResolveTypes, BoolLiteral) {
@@ -106,6 +116,25 @@ TEST(ResolveTypes, IntLiteral) {
 		"}\n");
 	EXPECT_TRUE(diags.empty());
 	EXPECT_EQ(project.getType(findRegionEntry(project)), Type::Int);
+}
+
+TEST(ResolveTypes, RegionDataStringAndList) {
+	auto [project, diags] = resolveFromSource(
+		"region RR_TEST {\n"
+		"    name: \"Test\"\n"
+		"    areas: [RA_FOREST, RA_FIELD]\n"
+		"}\n");
+	EXPECT_TRUE(diags.empty());
+	const auto* name = findRegionData(project, "name");
+	ASSERT_NE(name, nullptr);
+	EXPECT_EQ(project.getType(name), Type::String);
+	const auto* areas = findRegionData(project, "areas");
+	ASSERT_NE(areas, nullptr);
+	EXPECT_EQ(project.getType(areas), Type::List);
+	const auto& list = std::get<ListExpr>(areas->node);
+	ASSERT_EQ(list.elements.size(), 2u);
+	EXPECT_EQ(project.getType(list.elements[0].get()), Type::Enum);
+	EXPECT_EQ(project.getType(list.elements[1].get()), Type::Enum);
 }
 
 TEST(ResolveTypes, IdentifierEnum) {

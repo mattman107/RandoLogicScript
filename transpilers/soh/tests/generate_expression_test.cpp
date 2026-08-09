@@ -97,6 +97,21 @@ TEST(SohExpressions, IntLiteral) {
 		"-7");
 }
 
+TEST(SohExpressions, StringAndListLiterals) {
+	auto expr = sourceToExpression(
+		"define test():\n"
+		"    \"quoted\\\\path \\\"text\\\"\"\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"\"quoted\\\\path \\\"text\\\"\"");
+
+	expr = sourceToExpression(
+		"define test():\n"
+		"    [1, 2]\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr), "{1, 2}");
+}
+
 TEST(SohExpressions, Identifier) {
 	auto expr = sourceToExpression(
 		"define test(item: Item):\n"

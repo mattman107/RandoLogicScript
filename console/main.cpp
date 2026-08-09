@@ -74,16 +74,27 @@ struct TranspilerConfig {
 };
 
 static bool runTranspiler(const TranspilerConfig& config, const rls::ast::Project& project) {
+    if (config.name != "soh" && config.name != "ap") {
+        std::cerr << "error: unknown transpiler '" << config.name << "'\n";
+        return false;
+    }
+
     fs::create_directories(config.outputDir);
     DirectoryWriter writer(config.outputDir);
 
     if (config.name == "soh") {
-        rls::transpilers::soh::SohTranspiler(project).Transpile(writer);
-    } else if (config.name == "ap") {
-        rls::transpilers::ap::Transpile(project, writer);
+        auto diagnostics = rls::transpilers::soh::SohTranspiler(project).Transpile(writer);
+        bool hasErrors = false;
+        for (const auto& diagnostic : diagnostics) {
+            printDiagnostic(diagnostic);
+            hasErrors = hasErrors || diagnostic.level == rls::ast::DiagnosticLevel::Error;
+        }
+        if (hasErrors) {
+            std::cerr << "aborting due to SoH transpiler errors\n";
+            return false;
+        }
     } else {
-        std::cerr << "error: unknown transpiler '" << config.name << "'\n";
-        return false;
+        rls::transpilers::ap::Transpile(project, writer);
     }
 
     return true;

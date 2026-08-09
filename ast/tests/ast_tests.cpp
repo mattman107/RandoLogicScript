@@ -242,7 +242,6 @@ TEST(ExprTests, NestedBinaryExpressions) {
 // == Top-level declarations ===================================================
 
 TEST(DeclTests, RegionDecl) {
-	// region RR_SPIRIT_TEMPLE_FOYER { scene: SCENE_SPIRIT_TEMPLE, exits { ... } }
 	std::vector<Entry> exits;
 	exits.emplace_back(
 		Name("RR_SPIRIT_TEMPLE_ENTRYWAY"),
@@ -251,44 +250,49 @@ TEST(DeclTests, RegionDecl) {
 
 	std::vector<Section> sections;
 	sections.emplace_back(SectionKind::Exits, std::move(exits));
+	std::vector<RegionDataEntry> data;
+	data.emplace_back(Name("name"), makeExpr(StringLiteral{"Spirit Temple Foyer"}));
+	data.emplace_back(Name("scene"), makeExpr(Identifier{Name("SCENE_SPIRIT_TEMPLE")}));
 
 	RegionDecl region(
 		Name("RR_SPIRIT_TEMPLE_FOYER"),
 		RegionBody(
-			"Spirit Temple Foyer",
-			Name("SCENE_SPIRIT_TEMPLE"),
-			TimePasses::Auto,
-			{},
+			std::move(data),
 			std::move(sections)
 		)
 	);
 
 	EXPECT_EQ(region.key, "RR_SPIRIT_TEMPLE_FOYER");
-	EXPECT_EQ(region.body.name, "Spirit Temple Foyer");
-	ASSERT_TRUE(region.body.scene.has_value());
-	EXPECT_EQ(region.body.scene.value(), "SCENE_SPIRIT_TEMPLE");
-	EXPECT_EQ(region.body.timePasses, TimePasses::Auto);
+	ASSERT_EQ(region.body.data.size(), 2u);
+	ASSERT_NE(region.body.findData("name"), nullptr);
+	EXPECT_EQ(std::get<StringLiteral>(region.body.findData("name")->value->node).value, "Spirit Temple Foyer");
+	ASSERT_NE(region.body.findData("scene"), nullptr);
+	EXPECT_EQ(std::get<Identifier>(region.body.findData("scene")->value->node).name, "SCENE_SPIRIT_TEMPLE");
 	ASSERT_EQ(region.body.sections.size(), 1u);
 	EXPECT_EQ(region.body.sections[0].kind, SectionKind::Exits);
 	ASSERT_EQ(region.body.sections[0].entries.size(), 1u);
 	EXPECT_EQ(region.body.sections[0].entries[0].name, "RR_SPIRIT_TEMPLE_ENTRYWAY");
 }
 
-TEST(DeclTests, RegionWithTimePasses) {
+TEST(DeclTests, RegionDataPreservesLists) {
+	std::vector<ExprPtr> areas;
+	areas.push_back(makeExpr(Identifier{Name("RA_CASTLE_GROUNDS")}));
+	std::vector<RegionDataEntry> data;
+	data.emplace_back(Name("areas"), makeExpr(ListExpr(std::move(areas))));
+
 	RegionDecl region(
 		Name("RR_HC_GARDEN"),
 		RegionBody(
-			"Hyrule Castle Garden",
-			Name("SCENE_CASTLE_COURTYARD_GUARDS_DAY"),
-			TimePasses::No,
-			std::vector<Name>{Name("RA_CASTLE_GROUNDS")},
+			std::move(data),
 			{}
 		)
 	);
 
-	EXPECT_EQ(region.body.timePasses, TimePasses::No);
-	ASSERT_EQ(region.body.areas.size(), 1u);
-	EXPECT_EQ(region.body.areas[0], "RA_CASTLE_GROUNDS");
+	const auto* areasEntry = region.body.findData("areas");
+	ASSERT_NE(areasEntry, nullptr);
+	const auto& list = std::get<ListExpr>(areasEntry->value->node);
+	ASSERT_EQ(list.elements.size(), 1u);
+	EXPECT_EQ(std::get<Identifier>(list.elements[0]->node).name, "RA_CASTLE_GROUNDS");
 }
 
 TEST(DeclTests, ExtendRegionDecl) {
@@ -433,9 +437,12 @@ TEST(FileTests, FileWithMixedDeclarations) {
 	file.path = "test.rls";
 
 	// Add a region
+	std::vector<RegionDataEntry> regionData;
+	regionData.emplace_back(Name("name"), makeExpr(StringLiteral{"Test Region"}));
+	regionData.emplace_back(Name("scene"), makeExpr(Identifier{Name("SCENE_TEST")}));
 	file.declarations.emplace_back(RegionDecl(
 		Name("RR_TEST_REGION"),
-		RegionBody("Test Region", Name("SCENE_TEST"), TimePasses::Auto, {}, {})
+		RegionBody(std::move(regionData), {})
 	));
 
 	// Add a define
@@ -473,9 +480,12 @@ TEST(ProjectTests, AllDeclarationsAcrossFiles) {
 	// File 1: one region
 	File file1;
 	file1.path = "spirit_temple.rls";
+	std::vector<RegionDataEntry> regionData;
+	regionData.emplace_back(Name("name"), makeExpr(StringLiteral{"Spirit Temple Foyer"}));
+	regionData.emplace_back(Name("scene"), makeExpr(Identifier{Name("SCENE_SPIRIT_TEMPLE")}));
 	file1.declarations.emplace_back(RegionDecl(
 		Name("RR_SPIRIT_TEMPLE_FOYER"),
-		RegionBody("Spirit Temple Foyer", Name("SCENE_SPIRIT_TEMPLE"), TimePasses::Auto, {}, {})
+		RegionBody(std::move(regionData), {})
 	));
 
 	// File 2: one define + one extern define

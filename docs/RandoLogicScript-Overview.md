@@ -30,7 +30,7 @@ No lambdas, no macros, no `logic->` prefixes. `and`/`or`/`not` instead of `&&`/`
 
 ## Regions
 
-A region defines a scene, events, locations, and exits. Each entry is `Name: condition`.
+A region contains arbitrary data followed by events, locations, and exits. Each section entry is `Name: condition`; transpilers decide how to interpret region data keys such as `name` and `scene`.
 
 ```RLS
 region RR_SPIRIT_TEMPLE_FOYER {

@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <map>
 #include <utility>
@@ -47,8 +48,6 @@ enum class BinaryOp {
 };
 
 enum class SectionKind { Events, Locations, Exits };
-
-enum class TimePasses { Auto, Yes, No };
 
 enum class IdentifierKind {
 	Unresolved,
@@ -113,6 +112,11 @@ struct BoolLiteral {
 /// Integer literal: `0`, `1`, `48`, etc.
 struct IntLiteral {
 	int value;
+};
+
+/// String literal: `"text"`.
+struct StringLiteral {
+	std::string value;
 };
 
 /// Named identifier: enum values (`RG_HOOKSHOT`), parameters (`distance`), etc.
@@ -185,7 +189,7 @@ struct InvokeExpr {
 };
 
 /// The `here` keyword: resolves to the current region's name during sema.
-/// Only valid inside region and extend-region entry conditions.
+/// Only valid inside region data and entry conditions.
 struct HereRef {
 	Name resolvedRegion; ///< Filled in by sema; empty until resolved.
 };
@@ -223,6 +227,14 @@ struct MatchExpr {
 		: discriminant(std::move(discriminant)), arms(std::move(arms)) {}
 };
 
+/// List literal: `[first, second, ...]`.
+struct ListExpr {
+	std::vector<ExprPtr> elements;
+
+	explicit ListExpr(std::vector<ExprPtr> elements)
+		: elements(std::move(elements)) {}
+};
+
 // == Expr wrapper =============================================================
 
 /// The central expression node. Wraps a variant of all expression types plus
@@ -231,6 +243,7 @@ struct Expr {
 	using Variant = std::variant<
 		BoolLiteral,
 		IntLiteral,
+		StringLiteral,
 		Identifier,
 		MemberExpr,
 		UnaryExpr,
@@ -239,7 +252,8 @@ struct Expr {
 		CallExpr,
 		InvokeExpr,
 		HereRef,
-		MatchExpr
+		MatchExpr,
+		ListExpr
 	>;
 
 	Variant node;
@@ -291,25 +305,35 @@ struct Section {
 		: kind(kind), entries(std::move(entries)) {}
 };
 
-/// Region body: properties and sections shared by `region` and `extend region`.
+/// One arbitrary data entry in a region body: `key: value`.
+struct RegionDataEntry {
+	Name key;
+	ExprPtr value;
+	Span span;
+
+	RegionDataEntry(Name key, ExprPtr value, Span span = {})
+		: key(std::move(key)), value(std::move(value)), span(std::move(span)) {}
+};
+
+/// Region body: arbitrary data and sections shared by `region` declarations.
 struct RegionBody {
-	std::string name;
-	std::optional<Name> scene;
-	TimePasses timePasses = TimePasses::Auto;
-	std::vector<Name> areas;
+	std::vector<RegionDataEntry> data;
 	std::vector<Section> sections;
 
 	RegionBody(
-		std::string name,
-		std::optional<Name> scene,
-		TimePasses timePasses,
-		std::vector<Name> areas,
+		std::vector<RegionDataEntry> data,
 		std::vector<Section> sections)
-		: name(std::move(name)),
-		  scene(std::move(scene)),
-		  timePasses(timePasses),
-		  areas(std::move(areas)),
+		: data(std::move(data)),
 		  sections(std::move(sections)) {}
+
+	const RegionDataEntry* findData(std::string_view key) const {
+		for (const auto& entry : data) {
+			if (entry.key == key) {
+				return &entry;
+			}
+		}
+		return nullptr;
+	}
 };
 
 // == Top-level declarations ===================================================
@@ -475,6 +499,8 @@ struct File {
 enum class Type {
     Bool,       // true, false, always, never, and/or/not, conditions
     Int,        // integer literals, arithmetic results, hearts(), keys(), etc.
+	String,     // string literals
+	List,       // list literals
 	// TODO: Implement parameterized callable syntax (e.g., (Item) -> Bool).
 	Callable,   // generic callable value
 	Condition,  // callable with signature () -> Bool

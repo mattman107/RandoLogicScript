@@ -21,6 +21,7 @@ TEST(SohSolverTests, GenerateRegionSimple) {
         "region RR_HC_GATE {\n"
         "    name: \"Hyrule Castle Gate\"\n"
         "    scene: SCENE_HYRULE_CASTLE\n"
+		"    unrelatedData: \"ignored by SoH\"\n"
         "    events {\n"
         "        LOGIC_FAIRY_ACCESS: call_gossip_fairy() or can_use(RG_STICKS)\n"
         "        LOGIC_BUG_ACCESS: has(RG_POWER_BRACELET)\n"
@@ -80,11 +81,12 @@ TEST(SohSolverTests, GenerateRegionSimple) {
 
 TEST(SohSolverTests, GenerateRegionUsesExplicitConstructorForRegionMetadata) {
     const auto project = resolveFromSource (
+		"enum TimePasses { Auto, Yes, No }\n"
         "region RR_CHILD_SPAWN {\n"
         "    name: \"Child Spawn\"\n"
         "    scene: SCENE_ID_MAX\n"
-        "    no_time_passes\n"
-        "    areas: RA_LINKS_POCKET\n"
+        "    timePasses: TimePasses.No\n"
+        "    areas: [RA_LINKS_POCKET]\n"
         "\n"
         "    exits {\n"
         "        RR_KF_LINKS_HOUSE: always\n"
@@ -115,4 +117,55 @@ TEST(SohSolverTests, GenerateRegionUsesExplicitConstructorForRegionMetadata) {
         "\n"
         "}\n"
 	);
+}
+
+TEST(SohSolverTests, GenerateRegionRequiresSohMetadata) {
+    const auto project = resolveFromSource(
+        "region RR_TEST {\n"
+        "    scene: SCENE_TEST\n"
+        "}\n"
+    );
+
+    MemoryWriter out;
+    const auto diagnostics =
+        rls::transpilers::soh::SohTranspiler(project).GenerateRegionsSource(out);
+    ASSERT_EQ(diagnostics.size(), 1u);
+    EXPECT_EQ(diagnostics[0].level, rls::ast::DiagnosticLevel::Error);
+    EXPECT_EQ(diagnostics[0].message,
+        "region 'RR_TEST' requires SoH data key 'name'");
+    EXPECT_TRUE(out.content("regions.gen.cpp").empty());
+}
+
+TEST(SohSolverTests, GenerateRegionRejectsNonAreaListValues) {
+    const auto project = resolveFromSource(
+        "region RR_TEST {\n"
+        "    name: \"Test\"\n"
+        "    scene: SCENE_TEST\n"
+        "    areas: [RG_HOOKSHOT]\n"
+        "}\n"
+    );
+
+    MemoryWriter out;
+    const auto diagnostics =
+        rls::transpilers::soh::SohTranspiler(project).GenerateRegionsSource(out);
+    ASSERT_EQ(diagnostics.size(), 1u);
+    EXPECT_EQ(diagnostics[0].level, rls::ast::DiagnosticLevel::Error);
+    EXPECT_EQ(diagnostics[0].message,
+        "region 'RR_TEST' data key 'areas' must contain only Area enum values");
+    EXPECT_TRUE(out.content("regions.gen.cpp").empty());
+}
+
+TEST(SohSolverTests, TranspilePreflightSkipsAllOutputOnMetadataError) {
+    const auto project = resolveFromSource(
+        "region RR_TEST {\n"
+        "    scene: SCENE_TEST\n"
+        "}\n"
+    );
+
+    MemoryWriter out;
+    const auto diagnostics = rls::transpilers::soh::SohTranspiler(project).Transpile(out);
+    ASSERT_EQ(diagnostics.size(), 1u);
+    EXPECT_EQ(diagnostics[0].message,
+        "region 'RR_TEST' requires SoH data key 'name'");
+    EXPECT_TRUE(out.buffers.empty());
 }

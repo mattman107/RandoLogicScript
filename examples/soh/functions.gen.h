@@ -7,6 +7,11 @@
 #include "rls_match.h"
 #include "rls_host.h"
 
+enum class TimePasses : int {
+    Auto = 0,
+    Yes = 1,
+    No = 2
+};
 enum class WaterLevel : int {
     WL_LOW = 0,
     WL_MID = 1,

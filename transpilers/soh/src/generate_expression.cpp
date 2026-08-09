@@ -39,6 +39,17 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::IntLiteral& node) 
 	return std::to_string(node.value);
 }
 
+std::string SohTranspiler::GenerateExpression(const rls::ast::StringLiteral& node) const {
+    std::string result{"\""};
+    for (char character : node.value) {
+        if (character == '\\' || character == '\"') {
+            result += '\\';
+        }
+        result += character;
+    }
+    return result + "\"";
+}
+
 std::string SohTranspiler::GenerateExpression(const rls::ast::Identifier& node) const {
     if (node.kind == rls::ast::IdentifierKind::EnumValue) {
         if (auto enumName = project.getEnumType(&node); enumName.has_value()) {
@@ -334,6 +345,19 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::MatchExpr& node) c
 
 	oss << ")";
 	return oss.str();
+}
+
+std::string SohTranspiler::GenerateExpression(const rls::ast::ListExpr& node) const {
+    std::ostringstream oss;
+    oss << "{";
+    for (size_t index = 0; index < node.elements.size(); ++index) {
+        if (index > 0) {
+            oss << ", ";
+        }
+        oss << GenerateExpression(node.elements[index]);
+    }
+    oss << "}";
+    return oss.str();
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::Expr::Variant& node) const {

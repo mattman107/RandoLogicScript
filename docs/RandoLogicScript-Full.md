@@ -268,25 +268,27 @@ Key design choices:
 - Enum identifiers used for names, so cross-referencing with the C++ codebase is trivial.
 - Shorter function names (`has`, `can_use`, `flag`, `keys`) for ergonomics - the transpiler maps them to the full C++ method names.
 
-#### Region Properties
+#### Region Data
 
-Regions support properties declared before the section blocks:
+Regions support arbitrary `key: value` data entries before their section blocks. Values are regular RLS expressions, including strings and bracketed lists. The language validates duplicate keys, but each transpiler decides which keys it requires and how to interpret their values.
 
-| Property                         | Syntax                  | Default                 | Notes                                                  |
-| -------------------------------- | ----------------------- | ----------------------- | ------------------------------------------------------ |
-| `name`                           | `name: "Display Name"` | *(required)*            | Human-readable region name for the logic tracker and Archipelago. Supports `\"` and `\\` escapes. |
-| `scene`                          | `scene: SCENE_ID`       | *(required)*            | The scene ID for key counting, variant detection, etc. |
-| `time_passes` / `no_time_passes` | keyword                 | Auto-derived from scene | Whether the game clock advances in this region.        |
-| `areas`                          | `areas: [AREA_ID, ...]` | Auto-derived from scene | The set of hint areas this region belongs to.          |
+The SoH transpiler currently consumes these conventions:
 
-Defaults are derived automatically from the `scene` value - most regions don't need to specify `time_passes` or `areas` explicitly. Use explicit values only when the auto-derived defaults are incorrect (e.g. Hyrule Castle Grounds doesn't have time pass despite being an overworld scene):
+| Key | Value | Default | SoH meaning |
+| --- | --- | --- | --- |
+| `name` | string literal | required | Display name. Supports `\"` and `\\` escapes. |
+| `scene` | `Scene` enum value | required | Scene ID used by SoH region construction. |
+| `timePasses` | `TimePasses.Auto`, `Yes`, or `No` | `Auto` | Whether the game clock advances. |
+| `areas` | `[Area, ...]` | derived from `scene` | Hint areas for the region. |
+
+Other games can declare and consume entirely different data keys. For SoH, use explicit values only when the auto-derived defaults are incorrect (for example, Hyrule Castle Grounds does not have time pass despite being an overworld scene):
 
 ```rls
 region RR_HC_GARDEN {
     name: "Hyrule Castle Garden"
     scene: SCENE_CASTLE_COURTYARD_GUARDS_DAY
-    no_time_passes
-    areas: RA_CASTLE_GROUNDS
+    timePasses: TimePasses.No
+    areas: [RA_CASTLE_GROUNDS]
 
     exits {
         RR_HC_GARDEN_GATE: always
@@ -294,7 +296,7 @@ region RR_HC_GARDEN {
 }
 ```
 
-The C++ transpiler generates the appropriate constructor form: if only `scene` is specified, the 5-argument auto-deriving constructor is used; if `time_passes`/`no_time_passes` or `areas` are specified, the 7-argument explicit constructor is generated.
+The SoH C++ transpiler uses its auto-deriving constructor when `timePasses` is omitted or `Auto` and `areas` is omitted. Any explicit `Yes`/`No` value or `areas` list selects its explicit constructor form.
 
 #### Duplicate Locations Across Regions
 
@@ -843,11 +845,8 @@ file          = (region | extend | define | extern_define | enum_decl | extern_e
 
 region        = "region" IDENT "{" region_body "}" ;
 extend        = "extend" "region" IDENT "{" section* "}" ;
-region_body   = region_props section* ;
-region_props  = "name:" STRING_LITERAL
-                "scene:" IDENT
-                ("time_passes" | "no_time_passes")?
-                ("areas:" ident_list )? ;
+region_body   = region_data_entry* section* ;
+region_data_entry = IDENT ":" expr ;
 
 STRING_LITERAL = '"' ( ESCAPED_CHAR | [^"\\] )* '"' ;
 ESCAPED_CHAR   = '\\' ( '"' | '\\' ) ;
@@ -855,6 +854,8 @@ ESCAPED_CHAR   = '\\' ( '"' | '\\' ) ;
 section       = section_kind "{" entry* "}" ;
 section_kind  = "events" | "locations" | "exits" ;
 entry         = IDENT ":" expr ;
+
+list_literal  = "[" (expr ("," expr)*)? "]" ;
 
 define        = "define" IDENT "(" params? ")" ":" expr ;
 extern_define = "extern" "define" IDENT "(" params? ")" "->" type ;
