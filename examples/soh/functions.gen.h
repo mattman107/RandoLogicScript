@@ -7,6 +7,14 @@
 #include "rls_match.h"
 #include "rls_host.h"
 
+enum class WaterLevel : int {
+    WL_LOW = 0,
+    WL_MID = 1,
+    WL_HIGH = 2,
+    WL_LOW_OR_MID = 3,
+    WL_HIGH_OR_MID = 4
+};
+
 bool _can_get_drop_gold_skulltula(const EnemyDistance distance);
 bool _can_kill_gold_skulltula(const EnemyDistance distance, const bool wall_or_floor);
 bool call_gossip_fairy();

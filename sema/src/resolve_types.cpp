@@ -10,44 +10,118 @@
 
 namespace rls::sema {
 
-// == Step 1: Enum prefix resolution ==========================================
+// == Two-Stage Identifier Lookup (Stage A + B) ===============================
 
-std::optional<ast::Type> typeFromIdentifier(std::string_view name) {
-	struct PrefixEntry {
-		std::string_view prefix;
-		ast::Type type;
-	};
+/// Result of two-stage identifier lookup.
+struct IdentifierLookupResult {
+	std::optional<ast::Type> type;
+	std::optional<std::string> enumName; // Name of the enum if resolved
+	std::vector<std::string> ambiguousEnums; // If multiple enums claim the identifier
+};
 
-	// Longer prefixes first where they share a starting substring.
-	static constexpr PrefixEntry table[] = {
-		{"LOGIC_",   ast::Type::Logic},
-		{"SCENE_",   ast::Type::Scene},
-		{"DUNGEON_", ast::Type::Dungeon},
-		{"RG_",      ast::Type::Item},
-		{"RE_",      ast::Type::Enemy},
-		{"ED_",      ast::Type::Distance},
-		{"RT_",      ast::Type::Trick},
-		{"RSK_",     ast::Type::Setting},
-		{"RO_",      ast::Type::Setting},
-		{"RR_",      ast::Type::Region},
-		{"RC_",      ast::Type::Check},
-		{"RA_",      ast::Type::Area},
-		{"TK_",      ast::Type::Trial},
-		{"WL_",      ast::Type::WaterLevel},
-	};
+/// Two-stage identifier lookup:
+/// Check whether an identifier matches a declared enum member or glob pattern.
+/// Returns error info if multiple enums claim the identifier (ambiguity).
+static IdentifierLookupResult lookupIdentifierInEnums(
+	std::string_view name, const ast::Project& project) {
+	
+	std::vector<std::string> matchingEnums;
 
-	for (const auto& [prefix, type] : table) {
-		if (name.starts_with(prefix)) {
-			return type;
+	// Stage A: Check all user-defined and extern enums for exact member matches
+	for (const auto& [enumName, enumInfo] : project.EnumInfos) {
+		for (const auto& entry : enumInfo.entries) {
+			if (std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+				const auto& member = std::get<ast::EnumMemberInfo>(entry);
+				if (member.name.text == name) {
+					matchingEnums.push_back(enumName);
+					break; // Found a match in this enum, move to next enum
+				}
+			} else if (std::holds_alternative<ast::EnumPatternInfo>(entry)) {
+				const auto& pattern = std::get<ast::EnumPatternInfo>(entry);
+				if (globMatches(pattern.pattern, name)) {
+					matchingEnums.push_back(enumName);
+					break; // Found a match in this enum, move to next enum
+				}
+			}
 		}
 	}
-	return std::nullopt;
+
+	// If multiple enums claim the identifier, report ambiguity
+	if (matchingEnums.size() > 1) {
+		return {
+			.type = std::nullopt,
+			.enumName = std::nullopt,
+			.ambiguousEnums = std::move(matchingEnums)
+		};
+	}
+
+	// If exactly one enum claims it, return that enum type
+	if (matchingEnums.size() == 1) {
+		return {
+			.type = ast::Type::Enum,
+			.enumName = std::move(matchingEnums[0]),
+			.ambiguousEnums = {}
+		};
+	}
+
+	// No match found anywhere
+	return {
+		.type = std::nullopt,
+		.enumName = std::nullopt,
+		.ambiguousEnums = {}
+	};
+}
+
+static bool isEnumLikeType(ast::Type type) {
+	return type == ast::Type::Enum;
+}
+
+static bool isIntCompatibleType(ast::Type type) {
+	return type == ast::Type::Int || isEnumLikeType(type);
+}
+
+static bool enumEntryMatchesName(const ast::EnumEntryInfo& entry, std::string_view valueName) {
+	if (std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+		return std::get<ast::EnumMemberInfo>(entry).name.text == valueName;
+	}
+
+	const auto& pattern = std::get<ast::EnumPatternInfo>(entry);
+	return globMatches(pattern.pattern, valueName);
+}
+
+static bool enumContainsValueName(const ast::EnumInfo& info, std::string_view valueName) {
+	for (const auto& entry : info.entries) {
+		if (enumEntryMatchesName(entry, valueName)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static std::vector<std::string> enumNamesWithExplicitValue(const ast::Project& project, int value) {
+	std::vector<std::string> names;
+	for (const auto& [enumName, info] : project.EnumInfos) {
+		for (const auto& entry : info.entries) {
+			if (!std::holds_alternative<ast::EnumMemberInfo>(entry)) {
+				continue;
+			}
+			const auto& member = std::get<ast::EnumMemberInfo>(entry);
+			if (member.value.has_value() && *member.value == value) {
+				names.push_back(enumName);
+				break;
+			}
+		}
+	}
+	return names;
 }
 
 // == Step 4: Scope for parameters ============================================
 
 /// Maps parameter names to their types. nullopt = not yet inferred.
 using Scope = std::unordered_map<std::string, std::optional<ast::Type>>;
+
+/// Maps parameter names to enum identity when parameter type is Enum.
+using EnumIdentityScope = std::unordered_map<std::string, std::optional<std::string>>;
 
 // == Step 3: Bottom-up expression typing =====================================
 
@@ -57,6 +131,7 @@ using Scope = std::unordered_map<std::string, std::optional<ast::Type>>;
 struct ExprResolver {
 	ast::Project& project;
 	Scope& scope;
+	EnumIdentityScope& enumScope;
 	std::vector<ast::Diagnostic>& diags;
 	std::optional<ast::Name> currentRegion; // Set when resolving region/extend-region entries.
 
@@ -82,6 +157,9 @@ struct ExprResolver {
 
 		id->kind = ast::IdentifierKind::Parameter;
 		it->second = expectedType;
+		if (expectedType == T::Enum) {
+			enumScope[id->name.text] = std::nullopt;
+		}
 		project.setType(&expr, expectedType);
 		return true;
 	}
@@ -101,6 +179,12 @@ struct ExprResolver {
 		if (auto it = scope.find(node.name.text); it != scope.end()) {
 			node.kind = ast::IdentifierKind::Parameter;
 			if (it->second) {
+				if (*it->second == T::Enum) {
+					if (auto enumIt = enumScope.find(node.name.text);
+						enumIt != enumScope.end() && enumIt->second.has_value()) {
+						project.setEnumType(&expr, *enumIt->second);
+					}
+				}
 				return *it->second;
 			}
 			// Parameter exists but type not yet inferred (Step 5).
@@ -168,13 +252,13 @@ struct ExprResolver {
 				return ast::Type::Error;
 			}
 
-			auto returnType = typeFromAnnotation(ext->returnType->name.text);
-			if (!returnType.has_value() || *returnType != ast::Type::Bool) {
+			auto returnType = resolveTypeAnnotation(project, ext->returnType->name.text);
+			if (!returnType.has_value() || returnType->type != ast::Type::Bool) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("function '{}' cannot be used as a Condition callable because it returns {}",
 						node.name.text,
-						returnType.has_value() ? typeName(*returnType) : std::string_view{"<unknown>"}),
+						returnType.has_value() ? typeName(returnType->type) : std::string_view{"<unknown>"}),
 					expr.span
 				});
 				return ast::Type::Error;
@@ -184,10 +268,32 @@ struct ExprResolver {
 			return ast::Type::Condition;
 		}
 
-		if (auto t = typeFromIdentifier(node.name.text)) {
-			node.kind = ast::IdentifierKind::EnumValue;
-			return *t;
+		// Resolve identifiers exclusively through declared enum metadata.
+		auto lookup = lookupIdentifierInEnums(node.name.text, project);
+
+		// Check for ambiguity (multiple enums claiming the same identifier)
+		if (!lookup.ambiguousEnums.empty()) {
+			std::string enumList;
+			for (size_t i = 0; i < lookup.ambiguousEnums.size(); ++i) {
+				if (i > 0) enumList += ", ";
+				enumList += lookup.ambiguousEnums[i];
+			}
+			diags.push_back({
+				ast::DiagnosticLevel::Error,
+				std::format("ambiguous identifier '{}' found in multiple enums ({}); use EnumName.{} to disambiguate",
+					node.name.text, enumList, node.name.text),
+				expr.span
+			});
+			return ast::Type::Error;
 		}
+
+		// If found in an enum (Stage A match)
+		if (lookup.type && lookup.enumName) {
+			node.kind = ast::IdentifierKind::EnumValue;
+			project.setEnumType(&expr, *lookup.enumName);
+			return *lookup.type;
+		}
+
 		diags.push_back({
 			ast::DiagnosticLevel::Error,
 			std::format("unknown identifier '{}'", node.name.text),
@@ -279,13 +385,27 @@ struct ExprResolver {
 		case ast::BinaryOp::Eq:
 		case ast::BinaryOp::NotEq:
 			if (leftType != T::Error && rightType != T::Error
-				&& leftType != rightType) {
+				&& leftType != rightType
+				&& !(leftType == T::Int && isEnumLikeType(rightType))
+				&& !(rightType == T::Int && isEnumLikeType(leftType))) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("comparison between incompatible types {} and {}",
 						typeName(leftType), typeName(rightType)),
 					expr.span
 				});
+			}
+			if (leftType == T::Enum && rightType == T::Enum) {
+				auto leftEnum = project.getEnumType(node.left.get());
+				auto rightEnum = project.getEnumType(node.right.get());
+				if (leftEnum.has_value() && rightEnum.has_value() && *leftEnum != *rightEnum) {
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("comparison between enum '{}' and enum '{}'",
+							*leftEnum, *rightEnum),
+						expr.span
+					});
+				}
 			}
 			return T::Bool;
 
@@ -294,7 +414,7 @@ struct ExprResolver {
 		case ast::BinaryOp::LtEq:
 		case ast::BinaryOp::Gt:
 		case ast::BinaryOp::GtEq:
-			if (leftType != T::Error && leftType != T::Int) {
+			if (leftType != T::Error && !isIntCompatibleType(leftType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("comparison requires Int operands, left is {}",
@@ -302,7 +422,7 @@ struct ExprResolver {
 					node.left->span
 				});
 			}
-			if (rightType != T::Error && rightType != T::Int) {
+			if (rightType != T::Error && !isIntCompatibleType(rightType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("comparison requires Int operands, right is {}",
@@ -317,7 +437,7 @@ struct ExprResolver {
 		case ast::BinaryOp::Sub:
 		case ast::BinaryOp::Mul:
 		case ast::BinaryOp::Div:
-			if (leftType != T::Error && leftType != T::Int) {
+			if (leftType != T::Error && !isIntCompatibleType(leftType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("arithmetic requires Int operands, left is {}",
@@ -325,7 +445,7 @@ struct ExprResolver {
 					node.left->span
 				});
 			}
-			if (rightType != T::Error && rightType != T::Int) {
+			if (rightType != T::Error && !isIntCompatibleType(rightType)) {
 				diags.push_back({
 					ast::DiagnosticLevel::Error,
 					std::format("arithmetic requires Int operands, right is {}",
@@ -359,7 +479,25 @@ struct ExprResolver {
 		if (thenType == T::Error) return elseType == T::Error ? T::Error : elseType;
 		if (elseType == T::Error) return thenType;
 
-		if (thenType == elseType) return thenType;
+		if (thenType == elseType) {
+			if (thenType == T::Enum) {
+				auto thenEnum = project.getEnumType(node.thenBranch.get());
+				auto elseEnum = project.getEnumType(node.elseBranch.get());
+				if (thenEnum.has_value() && elseEnum.has_value() && *thenEnum != *elseEnum) {
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format("ternary branches have different enum types: '{}' and '{}'",
+							*thenEnum, *elseEnum),
+						expr.span
+					});
+					return T::Error;
+				}
+				if (thenEnum.has_value()) {
+					project.setEnumType(&expr, std::string(*thenEnum));
+				}
+			}
+			return thenType;
+		}
 
 		// Both bool-compatible but different (e.g. Int + Bool) → unify to Bool.
 		if (isBoolCompatible(thenType) && isBoolCompatible(elseType)) {
@@ -525,13 +663,14 @@ struct ExprResolver {
 		return result;
 	}
 
-	template <typename GetParamType>
+	template <typename GetParamType, typename GetParamEnumType>
 	void validateBoundArgTypes(
 		const std::string& function,
 		std::vector<T>& argTypes,
 		const ArgBindingResult& binding,
 		const ast::CallExpr& node,
-		GetParamType&& getParamType)
+		GetParamType&& getParamType,
+		GetParamEnumType&& getParamEnumType)
 	{
 		auto isCallArgCompatible = [](T expected, T actual) {
 			if (expected == T::Condition) {
@@ -539,6 +678,9 @@ struct ExprResolver {
 			}
 			if (expected == T::Callable) {
 				return actual == T::Callable || actual == T::Condition || isBoolCompatible(actual);
+			}
+			if (expected == T::Int) {
+				return isIntCompatibleType(actual);
 			}
 			return actual == expected;
 		};
@@ -549,20 +691,80 @@ struct ExprResolver {
 			size_t paramIndex = *binding.argToParam[argIndex];
 			auto paramType = getParamType(paramIndex);
 			if (!paramType) continue;
+			auto expectedEnum = *paramType == T::Enum
+				? getParamEnumType(paramIndex)
+				: std::optional<std::string_view>{};
 
 			if (argTypes[argIndex] == T::Error
 				&& inferUntypedParamIdentifier(*node.args[argIndex].value, *paramType)) {
 				argTypes[argIndex] = *paramType;
+				if (*paramType == T::Enum && expectedEnum.has_value()) {
+					auto& argExpr = *node.args[argIndex].value;
+					auto& identifier = std::get<ast::Identifier>(argExpr.node);
+					enumScope[identifier.name.text] = std::string(*expectedEnum);
+					project.setEnumType(&argExpr, std::string(*expectedEnum));
+				}
 			}
 
 			if (argTypes[argIndex] == T::Error) continue;
+
+			// For Enum-typed parameters with known identity, require the same enum.
+			if (*paramType == T::Enum) {
+				// Explicit int-conversion path for enum parameters.
+				if (argTypes[argIndex] == T::Int) {
+					if (expectedEnum.has_value()) {
+						// Enum context is explicit via parameter identity.
+						continue;
+					}
+
+					if (const auto* intLiteral = std::get_if<ast::IntLiteral>(&node.args[argIndex].value->node)) {
+						auto candidateEnums = enumNamesWithExplicitValue(project, intLiteral->value);
+						if (candidateEnums.size() > 1) {
+							std::string enumList = candidateEnums.front();
+							for (size_t i = 1; i < candidateEnums.size(); ++i) {
+								enumList += ", ";
+								enumList += candidateEnums[i];
+							}
+							diags.push_back({
+								ast::DiagnosticLevel::Error,
+								std::format("'{}' argument {} uses ambiguous integer value {}; matching enums: {}; provide explicit enum context or EnumName.ValueName",
+									function, argIndex + 1, intLiteral->value, enumList),
+								node.args[argIndex].value->span
+							});
+							continue;
+						}
+					}
+
+					// Generic Enum target with Int source is allowed if not provably ambiguous.
+					continue;
+				}
+
+				if (expectedEnum.has_value() && argTypes[argIndex] == T::Enum) {
+					auto actualEnum = project.getEnumType(node.args[argIndex].value.get());
+					if (!actualEnum.has_value() || *actualEnum != *expectedEnum) {
+						diags.push_back({
+							ast::DiagnosticLevel::Error,
+							std::format("'{}' argument {} expected enum '{}', got enum '{}'",
+								function,
+								argIndex + 1,
+								*expectedEnum,
+								actualEnum.has_value() ? *actualEnum : std::string_view{"<unknown>"}),
+							node.args[argIndex].value->span
+						});
+						continue;
+					}
+				}
+			}
+
 			if (isCallArgCompatible(*paramType, argTypes[argIndex])) continue;
+			auto expectedName = expectedEnum.has_value()
+				? std::format("enum '{}'", *expectedEnum)
+				: std::string(typeName(*paramType));
 
 			diags.push_back({
 				ast::DiagnosticLevel::Error,
 				std::format("'{}' argument {} expected {}, got {}",
-					function, argIndex + 1,
-					typeName(*paramType), typeName(argTypes[argIndex])),
+					function, argIndex + 1, expectedName, typeName(argTypes[argIndex])),
 				node.args[argIndex].value->span
 			});
 		}
@@ -591,9 +793,12 @@ struct ExprResolver {
 	std::optional<T> resolveExternParamType(const ast::ExternDefineDecl& ext, size_t index) {
 		std::optional<T> paramType = project.getType(&ext.params[index]);
 		if (!paramType && ext.params[index].type) {
-			if (auto t = typeFromAnnotation(ext.params[index].type->name.text)) {
-				paramType = *t;
-				project.setType(&ext.params[index], *t);
+			if (auto annotation = resolveTypeAnnotation(project, ext.params[index].type->name.text)) {
+				paramType = annotation->type;
+				project.setType(&ext.params[index], annotation->type);
+				if (annotation->enumName.has_value()) {
+					project.setEnumType(&ext.params[index], std::string(*annotation->enumName));
+				}
 			}
 		}
 		if (!paramType && ext.params[index].defaultValue) {
@@ -666,7 +871,8 @@ struct ExprResolver {
 				argTypes,
 				binding,
 				node,
-				[&](size_t i) { return resolveExternParamType(ext, i); });
+				[&](size_t i) { return resolveExternParamType(ext, i); },
+				[&](size_t i) { return project.getEnumType(&ext.params[i]); });
 
 			if (!binding.hasError) {
 				project.setResolvedCallArgs(
@@ -681,8 +887,11 @@ struct ExprResolver {
 			if (!ext.returnType) {
 				return T::Error;
 			}
-			if (auto returnType = typeFromAnnotation(ext.returnType->name.text)) {
-				return *returnType;
+			if (auto returnType = resolveTypeAnnotation(project, ext.returnType->name.text)) {
+				if (returnType->enumName.has_value()) {
+					project.setEnumType(&expr, std::string(*returnType->enumName));
+				}
+				return returnType->type;
 			}
 			return T::Error;
 		}
@@ -705,7 +914,8 @@ struct ExprResolver {
 				argTypes,
 				binding,
 				node,
-				[&](size_t i) { return project.getType(&def.params[i]); });
+				[&](size_t i) { return project.getType(&def.params[i]); },
+				[&](size_t i) { return project.getEnumType(&def.params[i]); });
 
 			if (!binding.hasError) {
 				project.setResolvedCallArgs(
@@ -719,6 +929,11 @@ struct ExprResolver {
 
 			// Return the define's body type if available.
 			if (auto bodyType = project.getType(def.body.get())) {
+				if (*bodyType == T::Enum) {
+					if (auto enumName = project.getEnumType(def.body.get()); enumName.has_value()) {
+						project.setEnumType(&expr, std::string(*enumName));
+					}
+				}
 				return *bodyType;
 			}
 			// Body not yet resolved — proper ordering in Step 7.
@@ -757,17 +972,41 @@ struct ExprResolver {
 		return T::Bool;
 	}
 
+	ast::Type resolve(const ast::MemberExpr& node, const ast::Expr& expr) {
+		if (const auto* enumInfo = project.getEnumInfo(node.object.text); enumInfo != nullptr) {
+			if (!enumContainsValueName(*enumInfo, node.member.text)) {
+				diags.push_back({
+					ast::DiagnosticLevel::Error,
+					std::format("'{}' is not a member of enum '{}'", node.member.text, node.object.text),
+					expr.span
+				});
+				return T::Error;
+			}
+
+			project.setEnumType(&expr, node.object.text);
+			return T::Enum;
+		}
+
+		diags.push_back({
+			ast::DiagnosticLevel::Error,
+			std::format("unknown enum '{}' in member access", node.object.text),
+			expr.span
+		});
+		return T::Error;
+	}
+
 	ast::Type resolve(ast::HereRef& node, ast::Expr& expr) {
 		if (!currentRegion.has_value()) {
 			diags.push_back({
 				ast::DiagnosticLevel::Error,
-				"'here' can only be used inside a region entry condition",
+				"'here' can only be used inside a region entry condition; it resolves to enum 'Region'",
 				expr.span
 			});
 			return T::Error;
 		}
 		node.resolvedRegion = *currentRegion;
-		return T::Region;
+		project.setEnumType(&expr, "Region");
+		return T::Enum;
 	}
 
 	ast::Type resolve(const ast::MatchExpr& node, const ast::Expr& expr) {
@@ -780,12 +1019,37 @@ struct ExprResolver {
 			return std::nullopt;
 		};
 
+		auto patternDisplayName = [](const ast::Expr& matchExpr) -> std::string {
+			if (auto* id = std::get_if<ast::Identifier>(&matchExpr.node)) {
+				return id->name.text;
+			}
+			if (auto* member = std::get_if<ast::MemberExpr>(&matchExpr.node)) {
+				return std::format("{}.{}", member->object.text, member->member.text);
+			}
+			return "<expr>";
+		};
+
+		auto enumIdentityOfExpr = [&](const ast::Expr& e) -> std::optional<std::string> {
+			if (auto enumIdentity = project.getEnumType(&e); enumIdentity.has_value()) {
+				return std::string(*enumIdentity);
+			}
+
+			if (auto* member = std::get_if<ast::MemberExpr>(&e.node)) {
+				if (project.getEnumInfo(member->object.text) != nullptr) {
+					return std::string(member->object.text);
+				}
+			}
+
+			return std::nullopt;
+		};
+
 		// --- Discriminant --------------------------------------------------
 		auto discrimType = resolveExpr(*node.discriminant);
 		auto discrimName = identifierText(*node.discriminant);
 
 		// --- Arm patterns: all must be the same enum type ---------------
 		std::optional<T> patternType;
+		std::optional<std::string> patternEnumIdentity;
 
 		for (size_t armIndex = 0; armIndex < node.arms.size(); ++armIndex) {
 			const auto& arm = node.arms[armIndex];
@@ -816,16 +1080,35 @@ struct ExprResolver {
 					continue;
 				}
 
+				auto currentPatternEnumIdentity = enumIdentityOfExpr(*pattern);
+
 				if (!patternType) {
 					patternType = currentPatternType;
+					if (currentPatternType == T::Enum) {
+						patternEnumIdentity = currentPatternEnumIdentity;
+					}
 				} else if (currentPatternType != *patternType) {
-					auto patternName = identifierText(*pattern).value_or("<expr>");
+					auto patternName = patternDisplayName(*pattern);
 					diags.push_back({
 						ast::DiagnosticLevel::Error,
 						std::format(
 							"match pattern '{}' is {} but expected {}",
 							patternName, typeName(currentPatternType),
 							typeName(*patternType)),
+						expr.span
+					});
+				} else if (currentPatternType == T::Enum
+					&& patternEnumIdentity.has_value()
+					&& currentPatternEnumIdentity.has_value()
+					&& *currentPatternEnumIdentity != *patternEnumIdentity) {
+					auto patternName = patternDisplayName(*pattern);
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format(
+							"match pattern '{}' is enum '{}' but expected enum '{}'",
+							patternName,
+							*currentPatternEnumIdentity,
+							*patternEnumIdentity),
 						expr.span
 					});
 				}
@@ -838,6 +1121,16 @@ struct ExprResolver {
 				if (!inferUntypedParamIdentifier(*node.discriminant, *patternType) && discrimName) {
 					if (auto it = scope.find(std::string(*discrimName)); it != scope.end() && !it->second) {
 						it->second = *patternType;
+						if (*patternType == T::Enum && patternEnumIdentity.has_value()) {
+							enumScope[std::string(*discrimName)] = *patternEnumIdentity;
+						}
+					}
+				}
+
+				if (*patternType == T::Enum && patternEnumIdentity.has_value()) {
+					project.setEnumType(node.discriminant.get(), *patternEnumIdentity);
+					if (discrimName.has_value()) {
+						enumScope[std::string(*discrimName)] = *patternEnumIdentity;
 					}
 				}
 			} else if (discrimType != *patternType) {
@@ -851,6 +1144,20 @@ struct ExprResolver {
 						typeName(*patternType)),
 					expr.span
 				});
+			} else if (discrimType == T::Enum && patternEnumIdentity.has_value()) {
+				auto discrimEnumIdentity = enumIdentityOfExpr(*node.discriminant);
+				if (discrimEnumIdentity.has_value() && *discrimEnumIdentity != *patternEnumIdentity) {
+					auto name = discrimName.value_or("<expr>");
+					diags.push_back({
+						ast::DiagnosticLevel::Error,
+						std::format(
+							"match discriminant '{}' is enum '{}' but patterns are enum '{}'",
+							name,
+							*discrimEnumIdentity,
+							*patternEnumIdentity),
+						expr.span
+					});
+				}
 			}
 		}
 
@@ -1033,11 +1340,16 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 	for (const auto& name : defineOrder) {
 		const auto* decl = project.DefineDecls.at(name);
 		Scope scope;
+		EnumIdentityScope enumScope;
 		for (const auto& param : decl->params) {
 			std::optional<ast::Type> annotatedType;
 			if (param.type) {
-				if (auto t = typeFromAnnotation(param.type->name.text)) {
-					annotatedType = *t;
+				if (auto annotation = resolveTypeAnnotation(project, param.type->name.text)) {
+					annotatedType = annotation->type;
+					if (annotation->enumName.has_value()) {
+						project.setEnumType(&param, std::string(*annotation->enumName));
+						enumScope[param.name.text] = std::string(*annotation->enumName);
+					}
 				} else {
 					diags.push_back({
 						ast::DiagnosticLevel::Error,
@@ -1053,7 +1365,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			std::optional<ast::Type> defaultType;
 			if (param.defaultValue) {
 				Scope noScope;
-				ExprResolver defaultResolver{project, noScope, diags};
+				EnumIdentityScope noEnumScope;
+				ExprResolver defaultResolver{project, noScope, noEnumScope, diags};
 				auto resolvedDefaultType =
 					defaultResolver.resolveExpr(*param.defaultValue);
 				if (resolvedDefaultType != ast::Type::Error) {
@@ -1064,16 +1377,41 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			if (annotatedType) {
 				scope[param.name.text] = *annotatedType;
 				project.setType(&param, *annotatedType);
+				if (*annotatedType == ast::Type::Enum && param.defaultValue
+					&& !project.getEnumType(&param).has_value()) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+						enumScope[param.name.text] = std::string(*defaultEnum);
+					} else {
+						enumScope[param.name.text] = std::nullopt;
+					}
+				} else if (*annotatedType == ast::Type::Enum
+					&& !enumScope.contains(param.name.text)) {
+					enumScope[param.name.text] = std::nullopt;
+				}
 			} else if (defaultType) {
 				scope[param.name.text] = *defaultType;
 				project.setType(&param, *defaultType);
+				if (*defaultType == ast::Type::Enum && param.defaultValue) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+						enumScope[param.name.text] = std::string(*defaultEnum);
+					} else {
+						enumScope[param.name.text] = std::nullopt;
+					}
+				} else if (*defaultType == ast::Type::Enum) {
+					enumScope[param.name.text] = std::nullopt;
+				}
 			} else {
 				// No annotation, no default — type unknown
 				// until body-usage inference.
 				scope[param.name.text] = std::nullopt;
+				enumScope[param.name.text] = std::nullopt;
 			}
 		}
-		ExprResolver resolver{project, scope, diags};
+		ExprResolver resolver{project, scope, enumScope, diags};
 		resolver.resolveExpr(*decl->body);
 
 		for (const auto& param : decl->params) {
@@ -1084,6 +1422,12 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			auto scopeIt = scope.find(param.name.text);
 			if (scopeIt != scope.end() && scopeIt->second.has_value()) {
 				project.setType(&param, *scopeIt->second);
+				if (*scopeIt->second == ast::Type::Enum) {
+					if (auto enumIt = enumScope.find(param.name.text);
+						enumIt != enumScope.end() && enumIt->second.has_value()) {
+						project.setEnumType(&param, *enumIt->second);
+					}
+				}
 			}
 		}
 	}
@@ -1093,8 +1437,11 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 		for (const auto& param : decl->params) {
 			std::optional<ast::Type> annotatedType;
 			if (param.type) {
-				if (auto t = typeFromAnnotation(param.type->name.text)) {
-					annotatedType = *t;
+				if (auto annotation = resolveTypeAnnotation(project, param.type->name.text)) {
+					annotatedType = annotation->type;
+					if (annotation->enumName.has_value()) {
+						project.setEnumType(&param, std::string(*annotation->enumName));
+					}
 				} else {
 					diags.push_back({
 						ast::DiagnosticLevel::Error,
@@ -1110,7 +1457,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 			std::optional<ast::Type> defaultType;
 			if (param.defaultValue) {
 				Scope noScope;
-				ExprResolver defaultResolver{project, noScope, diags};
+				EnumIdentityScope noEnumScope;
+				ExprResolver defaultResolver{project, noScope, noEnumScope, diags};
 				auto resolvedDefaultType =
 					defaultResolver.resolveExpr(*param.defaultValue);
 				if (resolvedDefaultType != ast::Type::Error) {
@@ -1120,8 +1468,21 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 
 			if (annotatedType) {
 				project.setType(&param, *annotatedType);
+				if (*annotatedType == ast::Type::Enum && param.defaultValue
+					&& !project.getEnumType(&param).has_value()) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+					}
+				}
 			} else if (defaultType) {
 				project.setType(&param, *defaultType);
+				if (*defaultType == ast::Type::Enum && param.defaultValue) {
+					auto defaultEnum = project.getEnumType(param.defaultValue.get());
+					if (defaultEnum.has_value()) {
+						project.setEnumType(&param, std::string(*defaultEnum));
+					}
+				}
 			}
 		}
 	}
@@ -1130,7 +1491,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 	{
 		for (auto& [name, decl] : project.RegionDecls) {
 			Scope regionScope;
-			ExprResolver resolver{project, regionScope, diags};
+			EnumIdentityScope regionEnumScope;
+			ExprResolver resolver{project, regionScope, regionEnumScope, diags};
 			resolver.currentRegion = decl->key;
 			for (const auto& section : decl->body.sections) {
 				for (const auto& entry : section.entries) {
@@ -1145,7 +1507,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 		for (const auto& [name, decls] : project.ExtendRegionDecls) {
 			for (const auto* decl : decls) {
 				Scope extendScope;
-				ExprResolver resolver{project, extendScope, diags};
+				EnumIdentityScope extendEnumScope;
+				ExprResolver resolver{project, extendScope, extendEnumScope, diags};
 				resolver.currentRegion = ast::Name(name);
 				for (const auto& section : decl->sections) {
 					for (const auto& entry : section.entries) {

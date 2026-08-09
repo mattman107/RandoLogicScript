@@ -1,10 +1,65 @@
 #include "soh.h"
+#include "enum_mappings.h"
 
 #include <sstream>
 
 using AT = rls::ast::Type;
 
 namespace rls::transpilers::soh {
+
+namespace {
+
+void writeEnumDeclarations(std::ostream& out, const rls::ast::Project& project) {
+    for (const auto& [enumName, info] : project.EnumInfos) {
+        if (info.kind != rls::ast::EnumKind::Normal) {
+            continue;
+        }
+
+        out << "enum class " << enumName << " : int {\n";
+        for (size_t i = 0; i < info.entries.size(); ++i) {
+            const auto& entry = info.entries[i];
+            if (!std::holds_alternative<rls::ast::EnumMemberInfo>(entry)) {
+                continue;
+            }
+
+            const auto& member = std::get<rls::ast::EnumMemberInfo>(entry);
+            if (i > 0) {
+                out << ",\n";
+            }
+            out << "    " << member.name.text;
+            if (member.value.has_value()) {
+                out << " = " << *member.value;
+            }
+        }
+        out << "\n};\n";
+    }
+}
+
+bool hasNormalEnums(const rls::ast::Project& project) {
+    for (const auto& [_, info] : project.EnumInfos) {
+        if (info.kind == rls::ast::EnumKind::Normal) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <typename T>
+std::string enumNodeType(const rls::ast::Project& p, const T* node) {
+    auto enumType = p.getEnumType(node);
+    if (!enumType.has_value()) {
+        return "int";
+    }
+
+    if (const auto* mapping = findHostEnumMapping(*enumType)) {
+        return std::string(mapping->cppType);
+    }
+
+    // User/extern enums currently map directly to their enum name.
+    return std::string(*enumType);
+}
+
+} // namespace
 
 template <typename T>
 std::string nodeType(const rls::ast::Project& p, const T* node) {
@@ -18,19 +73,7 @@ std::string nodeType(const rls::ast::Project& p, const T* node) {
         case AT::Int: return "int";
         case AT::Callable: return "std::function<bool()>";
         case AT::Condition: return "std::function<bool()>";
-        case AT::Item: return "RandomizerGet";
-        case AT::Enemy: return "RandomizerEnemy";
-        case AT::Distance: return "EnemyDistance";
-        case AT::Trick: return "RandomizerTrick";
-        case AT::Setting: return "RandomizerSettingKey";
-        case AT::Region: return "RandomizerRegion";
-        case AT::Check: return "RandomizerCheck";
-        case AT::Logic: return "LogicVal";
-        case AT::Scene: return "SceneID";
-        case AT::Dungeon: return "DungeonKey";
-        case AT::Area: return "RandomizerArea";
-        case AT::Trial: return "TrialKey";
-        case AT::WaterLevel: return "RandoWaterLevel";
+        case AT::Enum: return enumNodeType(p, node);
         default: return "unsupported_type";
     }
 }
@@ -68,6 +111,11 @@ void SohTranspiler::GenerateFunctionDefinitionsHeader(rls::OutputWriter& out) co
            << "#include \"rls_match.h\"\n"
            << "#include \"rls_host.h\"\n"
            << "\n";
+
+    writeEnumDeclarations(header, project);
+    if (hasNormalEnums(project)) {
+        header << "\n";
+    }
 
     for (const auto& [name, decl] : project.DefineDecls) {
         header << functionSignature(*this, project, decl, true) << ";\n";

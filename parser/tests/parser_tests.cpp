@@ -673,6 +673,122 @@ TEST(ParseExternDefine, TypedAndDefaultedParams) {
 	EXPECT_EQ(*ext.returnType, "Bool");
 }
 
+// == Enum declaration ========================================================
+
+TEST(ParseEnum, Empty) {
+	const auto& decl = parseDecl("enum Item {}");
+	const auto& e = std::get<EnumDecl>(decl);
+	EXPECT_EQ(e.name, "Item");
+	EXPECT_TRUE(e.members.empty());
+}
+
+TEST(ParseEnum, MembersWithOptionalExplicitValues) {
+	const auto& decl = parseDecl("enum Item { RG_HOOKSHOT, RG_FAIRY_BOW = 17 }");
+	const auto& e = std::get<EnumDecl>(decl);
+	EXPECT_EQ(e.name, "Item");
+	ASSERT_EQ(e.members.size(), 2u);
+	EXPECT_EQ(e.members[0].name, "RG_HOOKSHOT");
+	EXPECT_FALSE(e.members[0].explicitValue.has_value());
+	EXPECT_EQ(e.members[1].name, "RG_FAIRY_BOW");
+	ASSERT_TRUE(e.members[1].explicitValue.has_value());
+	EXPECT_EQ(*e.members[1].explicitValue, 17);
+}
+
+// == Extern enum declaration =================================================
+
+TEST(ParseExternEnum, Empty) {
+	const auto& decl = parseDecl("extern enum Item {}");
+	const auto& e = std::get<ExternEnumDecl>(decl);
+	EXPECT_EQ(e.name, "Item");
+	EXPECT_TRUE(e.entries.empty());
+}
+
+TEST(ParseExternEnum, MixedEntries) {
+	const auto& decl = parseDecl("extern enum Item { RG_HOOKSHOT, RG_*, *_KEY, R*_BOSS, RG_FAIRY_BOW = 9 }");
+	const auto& e = std::get<ExternEnumDecl>(decl);
+	EXPECT_EQ(e.name, "Item");
+	ASSERT_EQ(e.entries.size(), 5u);
+
+	ASSERT_TRUE(std::holds_alternative<EnumMemberDecl>(e.entries[0]));
+	EXPECT_EQ(std::get<EnumMemberDecl>(e.entries[0]).name, "RG_HOOKSHOT");
+
+	ASSERT_TRUE(std::holds_alternative<EnumPatternDecl>(e.entries[1]));
+	EXPECT_EQ(std::get<EnumPatternDecl>(e.entries[1]).pattern, "RG_*");
+
+	ASSERT_TRUE(std::holds_alternative<EnumPatternDecl>(e.entries[2]));
+	EXPECT_EQ(std::get<EnumPatternDecl>(e.entries[2]).pattern, "*_KEY");
+
+	ASSERT_TRUE(std::holds_alternative<EnumPatternDecl>(e.entries[3]));
+	EXPECT_EQ(std::get<EnumPatternDecl>(e.entries[3]).pattern, "R*_BOSS");
+
+	ASSERT_TRUE(std::holds_alternative<EnumMemberDecl>(e.entries[4]));
+	const auto& member = std::get<EnumMemberDecl>(e.entries[4]);
+	EXPECT_EQ(member.name, "RG_FAIRY_BOW");
+	ASSERT_TRUE(member.explicitValue.has_value());
+	EXPECT_EQ(*member.explicitValue, 9);
+}
+
+// == Region declaration =======================================================
+
+TEST(ParseMemberAccess, BasicDottedAccess) {
+	const auto& expr = parseExpr("Item.RG_HOOKSHOT");
+	const auto& m = std::get<MemberExpr>(expr.node);
+	EXPECT_EQ(m.object.text, "Item");
+	EXPECT_EQ(m.member.text, "RG_HOOKSHOT");
+}
+
+TEST(ParseMemberAccess, SpanIsNonZero) {
+	const auto& expr = parseExpr("Item.RG_HOOKSHOT");
+	// Structural (remove_content) nodes have a valid start position but no end.
+	EXPECT_GT(expr.span.start.column, 0u);
+}
+
+TEST(ParseMemberAccess, UsedAsCallArg) {
+	const auto& expr = parseExpr("has(Item.RG_HOOKSHOT)");
+	const auto& call = std::get<CallExpr>(expr.node);
+	EXPECT_EQ(call.callee.text, "has");
+	ASSERT_EQ(call.args.size(), 1u);
+	const auto& m = std::get<MemberExpr>(call.args[0].value->node);
+	EXPECT_EQ(m.object.text, "Item");
+	EXPECT_EQ(m.member.text, "RG_HOOKSHOT");
+}
+
+TEST(ParseMemberAccess, UsedInBinaryExpr) {
+	const auto& expr = parseExpr("Item.RG_HOOKSHOT == Item.RG_FAIRY_BOW");
+	const auto& bin = std::get<BinaryExpr>(expr.node);
+	EXPECT_EQ(bin.op, BinaryOp::Eq);
+	const auto& lhs = std::get<MemberExpr>(bin.left->node);
+	EXPECT_EQ(lhs.object.text, "Item");
+	EXPECT_EQ(lhs.member.text, "RG_HOOKSHOT");
+	const auto& rhs = std::get<MemberExpr>(bin.right->node);
+	EXPECT_EQ(rhs.object.text, "Item");
+	EXPECT_EQ(rhs.member.text, "RG_FAIRY_BOW");
+}
+
+TEST(ParseEnumDiagnostics, MissingEnumName) {
+	const auto file = parse("enum { RG_HOOKSHOT }");
+	EXPECT_TRUE(file.declarations.empty());
+	ASSERT_FALSE(file.diagnostics.empty());
+	EXPECT_EQ(file.diagnostics[0].level, DiagnosticLevel::Error);
+	EXPECT_EQ(file.diagnostics[0].message, "expected identifier");
+}
+
+TEST(ParseEnumDiagnostics, MissingCloseBrace) {
+	const auto file = parse("extern enum Item { RG_*");
+	EXPECT_TRUE(file.declarations.empty());
+	ASSERT_FALSE(file.diagnostics.empty());
+	EXPECT_EQ(file.diagnostics[0].level, DiagnosticLevel::Error);
+	EXPECT_EQ(file.diagnostics[0].message, "expected '}'");
+}
+
+TEST(ParseMemberAccessDiagnostics, MissingMemberNameAfterDot) {
+	const auto file = parse("define _(): Item.");
+	EXPECT_TRUE(file.declarations.empty());
+	ASSERT_FALSE(file.diagnostics.empty());
+	EXPECT_EQ(file.diagnostics[0].level, DiagnosticLevel::Error);
+	EXPECT_EQ(file.diagnostics[0].message, "expected declaration or end of file");
+}
+
 // == Region declaration =======================================================
 
 TEST(ParseRegion, MinimalRegion) {
@@ -880,6 +996,9 @@ TEST(ParseFile, MultipleRegions) {
 
 TEST(ParseFile, MixedDeclarations) {
 	const auto file = parse(
+		"enum Item { RG_HOOKSHOT }\n"
+		"extern enum HostItem { RG_* }\n"
+		"\n"
 		"extern define has(item) -> Bool\n"
 		"\n"
 		"define has_explosives():\n"
@@ -902,12 +1021,14 @@ TEST(ParseFile, MixedDeclarations) {
 		"  }\n"
 		"}\n"
 	);
-	ASSERT_EQ(file.declarations.size(), 5u);
-	EXPECT_TRUE(std::holds_alternative<ExternDefineDecl>(file.declarations[0]));
-	EXPECT_TRUE(std::holds_alternative<DefineDecl>(file.declarations[1]));
-	EXPECT_TRUE(std::holds_alternative<DefineDecl>(file.declarations[2]));
-	EXPECT_TRUE(std::holds_alternative<RegionDecl>(file.declarations[3]));
-	EXPECT_TRUE(std::holds_alternative<ExtendRegionDecl>(file.declarations[4]));
+	ASSERT_EQ(file.declarations.size(), 7u);
+	EXPECT_TRUE(std::holds_alternative<EnumDecl>(file.declarations[0]));
+	EXPECT_TRUE(std::holds_alternative<ExternEnumDecl>(file.declarations[1]));
+	EXPECT_TRUE(std::holds_alternative<ExternDefineDecl>(file.declarations[2]));
+	EXPECT_TRUE(std::holds_alternative<DefineDecl>(file.declarations[3]));
+	EXPECT_TRUE(std::holds_alternative<DefineDecl>(file.declarations[4]));
+	EXPECT_TRUE(std::holds_alternative<RegionDecl>(file.declarations[5]));
+	EXPECT_TRUE(std::holds_alternative<ExtendRegionDecl>(file.declarations[6]));
 }
 
 TEST(ParseFile, ExternDefineCallNamedArgsPreserved) {

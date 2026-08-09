@@ -93,6 +93,7 @@ struct kw_region : TAO_PEGTL_STRING("region") {};
 struct kw_extend : TAO_PEGTL_STRING("extend") {};
 struct kw_extern : TAO_PEGTL_STRING("extern") {};
 struct kw_define : TAO_PEGTL_STRING("define") {};
+struct kw_enum : TAO_PEGTL_STRING("enum") {};
 
 // Region sections
 struct kw_events : TAO_PEGTL_STRING("events") {};
@@ -168,6 +169,7 @@ struct reserved : sor<
 	kw<kw_extend>,
 	kw<kw_extern>,
 	kw<kw_define>,
+	kw<kw_enum>,
 	// Region sections
 	kw<kw_events>,
 	kw<kw_locations>,
@@ -214,6 +216,7 @@ struct close_paren   : one<')'> {};
 struct colon         : one<':'> {};
 struct comma         : one<','> {};
 struct question_mark : one<'?'> {};
+struct dot           : one<'.'> {};
 struct arrow         : string<'-', '>'> {};
 
 // == Operators ================================================================
@@ -272,6 +275,10 @@ struct arg_list : opt<list<arg, seq<_, comma, _>>> {};
 /// Function call:  IDENT "(" arg_list ")"
 struct call : seq<ident, _, open_paren, must<_, arg_list, _, close_paren>> {};
 
+/// Member access: IDENT "." IDENT  (enum type disambiguation)
+/// Example: Item.RG_HOOKSHOT
+struct member_access : seq<ident, dot, ident> {};
+
 /// Invoke-call suffix for callable evaluation: "()".
 struct invoke_suffix : seq<open_paren, _, close_paren> {};
 
@@ -297,13 +304,14 @@ struct match_expr;
 /// Parenthesised expression: "(" expr ")"
 struct paren_expr : seq<open_paren, must<_, expr, _, close_paren>> {};
 
-/// primary = invoke_call | call | match_expr | atom | "(" expr ")"
+/// primary = invoke_call | call | member_access | match_expr | atom | "(" expr ")"
 ///
 /// Ordering matters:
 ///   - `invoke_call` before `call` (both start with a call prefix)
-///   - `call` before `atom` (both start with `ident`, but call continues with "(")
+///   - `call` before `member_access` and `atom` (all start with `ident`)
+///   - `member_access` before `atom` (both start with `ident`)
 ///   - `match_expr` before `atom` (match starts with `kw_match` keyword)
-struct primary : sor<invoke_call, call, match_expr, paren_expr, atom> {};
+struct primary : sor<invoke_call, call, member_access, match_expr, paren_expr, atom> {};
 
 // -- Unary / binary / ternary -------------------------------------------------
 
@@ -455,15 +463,49 @@ struct define_decl : seq<
 
 /// extern define = "extern" "define" IDENT "(" params? ")" "->" type
 struct extern_define_decl : seq<
-	kw<kw_extern>, must<_, kw<kw_define>, _, ident, _,
+	kw<kw_extern>, _, kw<kw_define>, must<_, ident, _,
 	open_paren, _, opt<params>, _, close_paren, _,
 	arrow, _, type>
 > {};
 
+/// enum_member = IDENT ("=" INTEGER)?
+struct enum_member : seq<ident, opt<seq<_, one<'='>, _, integer>>> {};
+
+/// A wildcard glob pattern used in extern enum entries, requires at least one '*'.
+/// Examples: RG_*, *_KEY, R*_BOSS
+struct glob_char : sor<alnum, one<'_'>> {};
+struct glob_pattern : seq<star<glob_char>, one<'*'>, star<sor<glob_char, one<'*'>>>> {};
+
+/// extern_enum_entry = enum_member | glob_pattern
+struct extern_enum_entry : sor<glob_pattern, enum_member> {};
+
+/// enum = "enum" IDENT "{" enum_member ("," enum_member)* "}"
+struct enum_decl : seq<
+	kw<kw_enum>, must<_, ident, _,
+	open_brace, _,
+	opt<list<enum_member, seq<_, comma, _>>>, _,
+	close_brace>
+> {};
+
+/// extern enum = "extern" "enum" IDENT "{" extern_enum_entry ("," extern_enum_entry)* "}"
+struct extern_enum_decl : seq<
+	kw<kw_extern>, _, kw<kw_enum>, must<_, ident, _,
+	open_brace, _,
+	opt<list<extern_enum_entry, seq<_, comma, _>>>, _,
+	close_brace>
+> {};
+
 // -- Top-level file -----------------------------------------------------------
 
-/// declaration = region | extend | extern define | define
-struct declaration : sor<region_decl, extend_decl, extern_define_decl, define_decl> {};
+/// declaration = region | extend | extern enum | extern define | define | enum
+struct declaration : sor<
+	region_decl,
+	extend_decl,
+	extern_enum_decl,
+	extern_define_decl,
+	define_decl,
+	enum_decl
+> {};
 
 /// file = _ (declaration _)* eof
 /// Named `rls_file` to avoid clashing with any PEGTL or std types.

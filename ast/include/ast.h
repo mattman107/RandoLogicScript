@@ -190,6 +190,16 @@ struct HereRef {
 	Name resolvedRegion; ///< Filled in by sema; empty until resolved.
 };
 
+/// Member access: `EnumName.ValueName` — dotted enum value disambiguation.
+/// `object` is the enum type name; `member` is the value name.
+struct MemberExpr {
+	Name object;
+	Name member;
+
+	MemberExpr(Name object, Name member)
+		: object(std::move(object)), member(std::move(member)) {}
+};
+
 /// One arm of a `match` expression.
 struct MatchArm {
 	std::vector<ExprPtr> patterns;      // one or more match expressions
@@ -222,6 +232,7 @@ struct Expr {
 		BoolLiteral,
 		IntLiteral,
 		Identifier,
+		MemberExpr,
 		UnaryExpr,
 		BinaryExpr,
 		TernaryExpr,
@@ -374,8 +385,61 @@ struct ExternDefineDecl {
 		  span(span) {}
 };
 
-/// A top-level declaration: region, extend region, define, or extern define.
-using Decl = std::variant<RegionDecl, ExtendRegionDecl, DefineDecl, ExternDefineDecl>;
+/// One explicit enum member: `NAME` or `NAME = 3`.
+struct EnumMemberDecl {
+	Name name;
+	std::optional<int> explicitValue;
+	Span span;
+
+	EnumMemberDecl(Name name, std::optional<int> explicitValue = std::nullopt,
+	               Span span = {})
+		: name(std::move(name)),
+		  explicitValue(explicitValue),
+		  span(std::move(span)) {}
+};
+
+/// One glob pattern entry for extern enums, e.g. `RG_*`.
+struct EnumPatternDecl {
+	std::string pattern;
+	Span span;
+
+	EnumPatternDecl(std::string pattern, Span span = {})
+		: pattern(std::move(pattern)), span(std::move(span)) {}
+};
+
+using ExternEnumEntryDecl = std::variant<EnumMemberDecl, EnumPatternDecl>;
+
+/// `enum Name { A, B = 2 }`
+struct EnumDecl {
+	Name name;
+	std::vector<EnumMemberDecl> members;
+	Span span;
+
+	EnumDecl(Name name, std::vector<EnumMemberDecl> members, Span span = {})
+		: name(std::move(name)), members(std::move(members)), span(std::move(span)) {}
+};
+
+/// `extern enum Name { A, RG_* }`
+struct ExternEnumDecl {
+	Name name;
+	std::vector<ExternEnumEntryDecl> entries;
+	Span span;
+
+	ExternEnumDecl(Name name, std::vector<ExternEnumEntryDecl> entries,
+	               Span span = {})
+		: name(std::move(name)), entries(std::move(entries)), span(std::move(span)) {}
+};
+
+/// A top-level declaration: region, extend region, define, extern define,
+/// enum, or extern enum.
+using Decl = std::variant<
+	RegionDecl,
+	ExtendRegionDecl,
+	DefineDecl,
+	ExternDefineDecl,
+	EnumDecl,
+	ExternEnumDecl
+>;
 
 // == Diagnostics ==============================================================
 
@@ -414,21 +478,53 @@ enum class Type {
 	// TODO: Implement parameterized callable syntax (e.g., (Item) -> Bool).
 	Callable,   // generic callable value
 	Condition,  // callable with signature () -> Bool
-    Item,       // RG_*
-    Enemy,      // RE_*
-    Distance,   // ED_*
-    Trick,      // RT_*
-    Setting,    // RSK_* / RO_*
-    Region,     // RR_*
-    Check,      // RC_*
-    Logic,      // LOGIC_*
-    Scene,      // SCENE_*
-    Dungeon,    // DUNGEON_*
-    Area,       // RA_*
-    Trial,      // TK_*
-    WaterLevel, // WL_*
+	Enum,       // user-defined or host-defined enum value, identified by Project metadata
     Void,       // statements / declarations with no value
     Error,      // poison type — inference failed, suppress cascading errors
+};
+
+enum class EnumKind {
+	Normal,
+	Extern,
+};
+
+struct EnumMemberInfo {
+	Name name;
+	std::optional<int> value;
+	Span span;
+};
+
+struct EnumPatternInfo {
+	std::string pattern;
+	Span span;
+};
+
+using EnumEntryInfo = std::variant<EnumMemberInfo, EnumPatternInfo>;
+
+inline bool isEnumMemberEntry(const EnumEntryInfo& entry) {
+	return std::holds_alternative<EnumMemberInfo>(entry);
+}
+
+inline bool isEnumPatternEntry(const EnumEntryInfo& entry) {
+	return std::holds_alternative<EnumPatternInfo>(entry);
+}
+
+struct EnumInfo {
+	Name name;
+	EnumKind kind = EnumKind::Normal;
+	Type underlyingType = Type::Int;
+	std::vector<EnumEntryInfo> entries;
+	Span span;
+
+	EnumInfo() = default;
+
+	EnumInfo(Name name, EnumKind kind, Type underlyingType,
+	         std::vector<EnumEntryInfo> entries, Span span = {})
+		: name(std::move(name)),
+		  kind(kind),
+		  underlyingType(underlyingType),
+		  entries(std::move(entries)),
+		  span(std::move(span)) {}
 };
 
 /// Aggregated AST for all `.rls` files in a project.
@@ -440,6 +536,7 @@ struct Project {
 	std::map<std::string, std::vector<const ExtendRegionDecl*>> ExtendRegionDecls;
 	std::map<std::string, const DefineDecl*> DefineDecls;
 	std::map<std::string, const ExternDefineDecl*> ExternDefineDecls;
+	std::map<std::string, EnumInfo> EnumInfos;
 
 	template <typename T>
 	void setType(const T* node, Type type) {
@@ -450,6 +547,29 @@ struct Project {
 	std::optional<Type> getType(const T* node) const {
 		auto it = TypeTable.find(node);
 		return it != TypeTable.end() ? std::optional(it->second) : std::nullopt;
+	}
+
+	template <typename T>
+	void setEnumType(const T* node, std::string enumName) {
+		EnumTypeTable[node] = std::move(enumName);
+	}
+
+	template <typename T>
+	std::optional<std::string_view> getEnumType(const T* node) const {
+		auto it = EnumTypeTable.find(node);
+		if (it == EnumTypeTable.end()) {
+			return std::nullopt;
+		}
+		return it->second;
+	}
+
+	void registerEnum(EnumInfo info) {
+		EnumInfos[info.name.text] = std::move(info);
+	}
+
+	const EnumInfo* getEnumInfo(std::string_view enumName) const {
+		auto it = EnumInfos.find(std::string(enumName));
+		return it != EnumInfos.end() ? &it->second : nullptr;
 	}
 
 	void setResolvedCallArgs(const CallExpr* node, std::vector<const Expr*> args) {
@@ -463,6 +583,7 @@ struct Project {
 
 private:
 	std::unordered_map<const void*, Type> TypeTable;
+	std::unordered_map<const void*, std::string> EnumTypeTable;
 	std::unordered_map<const CallExpr*, std::vector<const Expr*>> ResolvedCallArgs;
 };
 

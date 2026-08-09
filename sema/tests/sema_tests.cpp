@@ -60,6 +60,24 @@ static File makeExtendFile(const std::string& path, const std::string& regionNam
 	return f;
 }
 
+/// Build a minimal File containing a single EnumDecl.
+static File makeEnumFile(const std::string& path, const std::string& enumName,
+	std::vector<EnumMemberDecl> members = {}, Span span = {}) {
+	File f;
+	f.path = path;
+	f.declarations.emplace_back(EnumDecl(Name(enumName), std::move(members), span));
+	return f;
+}
+
+/// Build a minimal File containing a single ExternEnumDecl.
+static File makeExternEnumFile(const std::string& path, const std::string& enumName,
+	std::vector<ExternEnumEntryDecl> entries = {}, Span span = {}) {
+	File f;
+	f.path = path;
+	f.declarations.emplace_back(ExternEnumDecl(Name(enumName), std::move(entries), span));
+	return f;
+}
+
 /// Count diagnostics of a given level.
 static size_t countErrors(const std::vector<Diagnostic>& diags) {
 	size_t n = 0;
@@ -86,6 +104,7 @@ TEST(CollectDeclarations, EmptyProject) {
 	EXPECT_TRUE(project.ExtendRegionDecls.empty());
 	EXPECT_TRUE(project.DefineDecls.empty());
 	EXPECT_TRUE(project.ExternDefineDecls.empty());
+	EXPECT_TRUE(project.EnumInfos.empty());
 }
 
 TEST(CollectDeclarations, EmptyFile) {
@@ -147,6 +166,50 @@ TEST(CollectDeclarations, SingleExtendRegion) {
 	EXPECT_TRUE(diags.empty());
 	ASSERT_TRUE(project.ExtendRegionDecls.contains("RR_TEST"));
 	ASSERT_EQ(project.ExtendRegionDecls.at("RR_TEST").size(), 1u);
+}
+
+TEST(CollectDeclarations, SingleEnum) {
+	Project project;
+	std::vector<EnumMemberDecl> members;
+	members.emplace_back(Name("RG_HOOKSHOT"));
+	members.emplace_back(Name("RG_FAIRY_BOW"), 7);
+	project.files.push_back(makeEnumFile("a.rls", "Item", std::move(members)));
+
+	auto diags = collectDeclarations(project);
+
+	EXPECT_TRUE(diags.empty());
+	ASSERT_EQ(project.EnumInfos.size(), 1u);
+	ASSERT_TRUE(project.EnumInfos.contains("Item"));
+	const auto& info = project.EnumInfos.at("Item");
+	EXPECT_EQ(info.kind, EnumKind::Normal);
+	ASSERT_EQ(info.entries.size(), 2u);
+	ASSERT_TRUE(std::holds_alternative<EnumMemberInfo>(info.entries[0]));
+	ASSERT_TRUE(std::holds_alternative<EnumMemberInfo>(info.entries[1]));
+	EXPECT_EQ(std::get<EnumMemberInfo>(info.entries[0]).name, "RG_HOOKSHOT");
+	EXPECT_FALSE(std::get<EnumMemberInfo>(info.entries[0]).value.has_value());
+	EXPECT_EQ(std::get<EnumMemberInfo>(info.entries[1]).name, "RG_FAIRY_BOW");
+	ASSERT_TRUE(std::get<EnumMemberInfo>(info.entries[1]).value.has_value());
+	EXPECT_EQ(*std::get<EnumMemberInfo>(info.entries[1]).value, 7);
+}
+
+TEST(CollectDeclarations, SingleExternEnum) {
+	Project project;
+	std::vector<ExternEnumEntryDecl> entries;
+	entries.emplace_back(EnumMemberDecl(Name("RG_HOOKSHOT")));
+	entries.emplace_back(EnumPatternDecl("RG_*"));
+	project.files.push_back(makeExternEnumFile("a.rls", "Item", std::move(entries)));
+
+	auto diags = collectDeclarations(project);
+
+	EXPECT_TRUE(diags.empty());
+	ASSERT_EQ(project.EnumInfos.size(), 1u);
+	ASSERT_TRUE(project.EnumInfos.contains("Item"));
+	const auto& info = project.EnumInfos.at("Item");
+	EXPECT_EQ(info.kind, EnumKind::Extern);
+	ASSERT_EQ(info.entries.size(), 2u);
+	ASSERT_TRUE(std::holds_alternative<EnumMemberInfo>(info.entries[0]));
+	ASSERT_TRUE(std::holds_alternative<EnumPatternInfo>(info.entries[1]));
+	EXPECT_EQ(std::get<EnumPatternInfo>(info.entries[1]).pattern, "RG_*");
 }
 
 // == Multiple declarations across files =======================================
@@ -316,6 +379,18 @@ TEST(CollectDeclarations, MultipleDuplicateErrors) {
 	EXPECT_EQ(countErrors(diags), 2u);
 }
 
+TEST(CollectDeclarations, DuplicateEnumError) {
+	Project project;
+	project.files.push_back(makeEnumFile("a.rls", "Item", {EnumMemberDecl(Name("RG_A"))}));
+	project.files.push_back(makeExternEnumFile("b.rls", "Item", {EnumPatternDecl("RG_*")}));
+
+	auto diags = collectDeclarations(project);
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("duplicate enum 'Item'"), std::string::npos);
+	EXPECT_EQ(project.EnumInfos.size(), 1u);
+}
+
 // == Different decl types can share names =====================================
 
 TEST(CollectDeclarations, SameNameDifferentDeclTypes) {
@@ -345,6 +420,7 @@ TEST(CollectDeclarations, IdempotentOnRerun) {
 	EXPECT_EQ(project.RegionDecls.size(), 1u);
 	EXPECT_EQ(project.DefineDecls.size(), 1u);
 	EXPECT_EQ(project.ExternDefineDecls.size(), 1u);
+	EXPECT_EQ(project.EnumInfos.size(), 0u);
 
 	// Run again — should produce the same result, not accumulate.
 	auto diags2 = collectDeclarations(project);
@@ -352,6 +428,7 @@ TEST(CollectDeclarations, IdempotentOnRerun) {
 	EXPECT_EQ(project.RegionDecls.size(), 1u);
 	EXPECT_EQ(project.DefineDecls.size(), 1u);
 	EXPECT_EQ(project.ExternDefineDecls.size(), 1u);
+	EXPECT_EQ(project.EnumInfos.size(), 0u);
 }
 
 // == Pointer stability ========================================================
@@ -449,6 +526,38 @@ TEST(CollectDeclarations, ParsedExtendRegion) {
 	EXPECT_TRUE(diags.empty());
 	ASSERT_TRUE(project.ExtendRegionDecls.contains("RR_SPIRIT_TEMPLE_FOYER"));
 	ASSERT_EQ(project.ExtendRegionDecls.at("RR_SPIRIT_TEMPLE_FOYER").size(), 1u);
+}
+
+TEST(CollectDeclarations, ParsedEnum) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"enum Item { RG_HOOKSHOT, RG_FAIRY_BOW = 7 }\n",
+		"enums.rls"
+	));
+
+	auto diags = collectDeclarations(project);
+
+	EXPECT_TRUE(diags.empty());
+	ASSERT_TRUE(project.EnumInfos.contains("Item"));
+	const auto& info = project.EnumInfos.at("Item");
+	EXPECT_EQ(info.kind, EnumKind::Normal);
+	ASSERT_EQ(info.entries.size(), 2u);
+}
+
+TEST(CollectDeclarations, ParsedExternEnum) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"extern enum Item { RG_HOOKSHOT, RG_* }\n",
+		"extern_enums.rls"
+	));
+
+	auto diags = collectDeclarations(project);
+
+	EXPECT_TRUE(diags.empty());
+	ASSERT_TRUE(project.EnumInfos.contains("Item"));
+	const auto& info = project.EnumInfos.at("Item");
+	EXPECT_EQ(info.kind, EnumKind::Extern);
+	ASSERT_EQ(info.entries.size(), 2u);
 }
 
 TEST(CollectDeclarations, ParsedMultiFileProject) {
@@ -555,6 +664,7 @@ TEST(CollectDeclarations, DiagnosticSpanPointsToDuplicate) {
 TEST(Analyze, PopulatesDeclMaps) {
 	Project project;
 	project.files.push_back(rls::parser::ParseString(
+		"extern enum Item { RG_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"region RR_FOYER {\n"
