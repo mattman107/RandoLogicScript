@@ -1,10 +1,35 @@
 #include "soh.h"
+#include "enum_mappings.h"
 
 #include <optional>
 #include <sstream>
-#include <unordered_map>
 
 namespace rls::transpilers::soh {
+
+namespace {
+
+std::string enumCppType(std::string_view enumName) {
+    if (const auto* mapping = findHostEnumMapping(enumName)) {
+        return std::string(mapping->cppType);
+    }
+    return std::string(enumName);
+}
+
+bool isEnumLikeType(rls::ast::Type type) {
+    return type == rls::ast::Type::Enum;
+}
+
+std::string qualifyEnumValue(std::string_view enumName, std::string_view valueName) {
+    if (const auto* mapping = findHostEnumMapping(enumName)) {
+        if (!mapping->cppValueNamespace.empty()) {
+            return std::string(mapping->cppValueNamespace) + "::" + std::string(valueName);
+        }
+        return std::string(valueName);
+    }
+    return std::string(enumName) + "::" + std::string(valueName);
+}
+
+} // namespace
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::BoolLiteral& node) const {
 	return node.value ? "true" : "false";
@@ -14,31 +39,24 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::IntLiteral& node) 
 	return std::to_string(node.value);
 }
 
+std::string SohTranspiler::GenerateExpression(const rls::ast::StringLiteral& node) const {
+    std::string result{"\""};
+    for (char character : node.value) {
+        if (character == '\\' || character == '\"') {
+            result += '\\';
+        }
+        result += character;
+    }
+    return result + "\"";
+}
+
 std::string SohTranspiler::GenerateExpression(const rls::ast::Identifier& node) const {
     if (node.kind == rls::ast::IdentifierKind::EnumValue) {
-        auto type = project.getType(&node);
-        if (!type.has_value()) {
-            return node.name.text;
+        if (auto enumName = project.getEnumType(&node); enumName.has_value()) {
+            return qualifyEnumValue(*enumName, node.name.text);
         }
-        switch (type.value()) {
-            case rls::ast::Type::Item: return "RandomizerGet::" + node.name.text;
-            case rls::ast::Type::Enemy: return "RandomizerEnemy::" + node.name.text;
-            case rls::ast::Type::Distance: return "EnemyDistance::" + node.name.text;
-            case rls::ast::Type::Trick: return "RandomizerTrick::" + node.name.text;
-            // We current map RSK_ and RO_ settings to a single enum, but SOH has 1 RSK_ enum about 55 RO_ enums,
-            // so we can't map to one type and back out to the correct prefix without losing information.
-            // This is a gap we'll have to address. For now, C++ accepts the unqualified name which we'll take advantage of..
-            //case rls::ast::Type::Setting: return "RandomizerSettingKey::" + node.name.text;
-            case rls::ast::Type::Region: return "RandomizerRegion::" + node.name.text;
-            case rls::ast::Type::Check: return "RandomizerCheck::" + node.name.text;
-            case rls::ast::Type::Logic: return "LogicVal::" + node.name.text;
-            case rls::ast::Type::Scene: return "SceneID::" + node.name.text;
-            case rls::ast::Type::Dungeon: return "DungeonKey::" + node.name.text;
-            case rls::ast::Type::Area: return "RandomizerArea::" + node.name.text;
-            case rls::ast::Type::Trial: return "TrialKey::" + node.name.text;
-            case rls::ast::Type::WaterLevel: return "RandoWaterLevel::" + node.name.text;
-            default: return node.name.text;
-        }
+
+        return node.name.text;
     } else if (node.kind == rls::ast::IdentifierKind::Parameter) {
         return node.name.text;
     } else if (node.kind == rls::ast::IdentifierKind::FunctionRef) {
@@ -106,31 +124,62 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::UnaryExpr& node) c
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::BinaryExpr& node) const {
+    auto generateIntegerCompatibleOperand = [&](const rls::ast::ExprPtr& operand,
+                                                 int precedence,
+                                                 bool isRightChild = false) {
+        auto code = GenerateChildExpression(operand, precedence, isRightChild);
+        if (project.getType(operand.get()) == rls::ast::Type::Enum) {
+            return "static_cast<int>(" + code + ")";
+        }
+        return code;
+    };
+
+    const auto leftType = project.getType(node.left.get());
+    const auto rightType = project.getType(node.right.get());
+    const bool isMixedEnumInt = (leftType == rls::ast::Type::Enum && rightType == rls::ast::Type::Int)
+        || (leftType == rls::ast::Type::Int && rightType == rls::ast::Type::Enum);
+
     switch (node.op) {
     case rls::ast::BinaryOp::And:
         return GenerateChildExpression(node.left, 14) + " && " + GenerateChildExpression(node.right, 14, true);
     case rls::ast::BinaryOp::Or:
         return GenerateChildExpression(node.left, 15) + " || " + GenerateChildExpression(node.right, 15, true);
     case rls::ast::BinaryOp::Eq:
+        if (isMixedEnumInt) {
+            return generateIntegerCompatibleOperand(node.left, 10) + " == "
+                + generateIntegerCompatibleOperand(node.right, 10, true);
+        }
         return GenerateChildExpression(node.left, 10) + " == " + GenerateChildExpression(node.right, 10, true);
     case rls::ast::BinaryOp::NotEq:
+        if (isMixedEnumInt) {
+            return generateIntegerCompatibleOperand(node.left, 10) + " != "
+                + generateIntegerCompatibleOperand(node.right, 10, true);
+        }
         return GenerateChildExpression(node.left, 10) + " != " + GenerateChildExpression(node.right, 10, true);
     case rls::ast::BinaryOp::Lt:
-        return GenerateChildExpression(node.left, 9) + " < " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " < "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::LtEq:
-        return GenerateChildExpression(node.left, 9) + " <= " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " <= "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::Gt:
-        return GenerateChildExpression(node.left, 9) + " > " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " > "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::GtEq:
-        return GenerateChildExpression(node.left, 9) + " >= " + GenerateChildExpression(node.right, 9, true);
+        return generateIntegerCompatibleOperand(node.left, 9) + " >= "
+            + generateIntegerCompatibleOperand(node.right, 9, true);
     case rls::ast::BinaryOp::Add:
-        return GenerateChildExpression(node.left, 6) + " + " + GenerateChildExpression(node.right, 6, true);
+        return generateIntegerCompatibleOperand(node.left, 6) + " + "
+            + generateIntegerCompatibleOperand(node.right, 6, true);
     case rls::ast::BinaryOp::Sub:
-        return GenerateChildExpression(node.left, 6) + " - " + GenerateChildExpression(node.right, 6, true);
+        return generateIntegerCompatibleOperand(node.left, 6) + " - "
+            + generateIntegerCompatibleOperand(node.right, 6, true);
     case rls::ast::BinaryOp::Mul:
-        return GenerateChildExpression(node.left, 5) + " * " + GenerateChildExpression(node.right, 5, true);
+        return generateIntegerCompatibleOperand(node.left, 5) + " * "
+            + generateIntegerCompatibleOperand(node.right, 5, true);
     case rls::ast::BinaryOp::Div:
-        return GenerateChildExpression(node.left, 5) + " / " + GenerateChildExpression(node.right, 5, true);
+        return generateIntegerCompatibleOperand(node.left, 5) + " / "
+            + generateIntegerCompatibleOperand(node.right, 5, true);
     default:
         return "";
     }
@@ -159,9 +208,35 @@ std::optional<rls::ast::Type> SohTranspiler::ResolveCallParamType(
     return std::nullopt;
 }
 
+std::optional<std::string> SohTranspiler::ResolveCallParamEnumCppType(
+    const rls::ast::CallExpr& node,
+    size_t index) const
+{
+    if (auto externIt = project.ExternDefineDecls.find(node.callee.text);
+        externIt != project.ExternDefineDecls.end() && index < externIt->second->params.size()) {
+        auto enumType = project.getEnumType(&externIt->second->params[index]);
+        if (enumType.has_value()) {
+            return enumCppType(*enumType);
+        }
+        return std::nullopt;
+    }
+
+    if (auto defineIt = project.DefineDecls.find(node.callee.text);
+        defineIt != project.DefineDecls.end() && index < defineIt->second->params.size()) {
+        auto enumType = project.getEnumType(&defineIt->second->params[index]);
+        if (enumType.has_value()) {
+            return enumCppType(*enumType);
+        }
+        return std::nullopt;
+    }
+
+    return std::nullopt;
+}
+
 std::string SohTranspiler::GenerateCallArgument(
     const rls::ast::Expr* argExpr,
-    std::optional<rls::ast::Type> paramType) const
+    std::optional<rls::ast::Type> paramType,
+    std::optional<std::string> paramEnumCppType) const
 {
     auto argType = project.getType(argExpr);
     bool passConditionByValue = paramType.has_value()
@@ -185,7 +260,22 @@ std::string SohTranspiler::GenerateCallArgument(
         return "[]{return " + GenerateExpression(argExpr->node) + ";}";
     }
 
-    return GenerateExpression(argExpr->node);
+    const auto argCode = GenerateExpression(argExpr->node);
+    if (!paramType.has_value() || !argType.has_value()) {
+        return argCode;
+    }
+
+    if (paramType.value() == rls::ast::Type::Int && isEnumLikeType(argType.value())) {
+        return "static_cast<int>(" + argCode + ")";
+    }
+
+    if (isEnumLikeType(paramType.value()) && argType.value() == rls::ast::Type::Int) {
+        if (paramEnumCppType.has_value()) {
+            return "static_cast<" + *paramEnumCppType + ">(" + argCode + ")";
+        }
+    }
+
+    return argCode;
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::CallExpr& node) const {
@@ -205,7 +295,8 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::CallExpr& node) co
         }
 
         auto paramType = ResolveCallParamType(node, i);
-        oss << GenerateCallArgument(resolved[i], paramType);
+        auto paramEnumCppType = ResolveCallParamEnumCppType(node, i);
+        oss << GenerateCallArgument(resolved[i], paramType, paramEnumCppType);
     }
     oss << ")";
     return oss.str();
@@ -213,6 +304,10 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::CallExpr& node) co
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::InvokeExpr& node) const {
     return GenerateExpression(node.callee) + "()";
+}
+
+std::string SohTranspiler::GenerateExpression(const rls::ast::MemberExpr& node) const {
+    return qualifyEnumValue(node.object.text, node.member.text);
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::HereRef& node) const {
@@ -250,6 +345,19 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::MatchExpr& node) c
 
 	oss << ")";
 	return oss.str();
+}
+
+std::string SohTranspiler::GenerateExpression(const rls::ast::ListExpr& node) const {
+    std::ostringstream oss;
+    oss << "{";
+    for (size_t index = 0; index < node.elements.size(); ++index) {
+        if (index > 0) {
+            oss << ", ";
+        }
+        oss << GenerateExpression(node.elements[index]);
+    }
+    oss << "}";
+    return oss.str();
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::Expr::Variant& node) const {

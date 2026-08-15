@@ -30,7 +30,7 @@ No lambdas, no macros, no `logic->` prefixes. `and`/`or`/`not` instead of `&&`/`
 
 ## Regions
 
-A region defines a scene, events, locations, and exits. Each entry is `Name: condition`.
+A region contains arbitrary data followed by events, locations, and exits. Each section entry is `Name: condition`; transpilers decide how to interpret region data keys such as `name` and `scene`.
 
 ```RLS
 region RR_SPIRIT_TEMPLE_FOYER {
@@ -94,6 +94,22 @@ Conditions are boolean expressions using short function names that the transpile
 | `setting(RSK_FOREST) is RO_CLOSED_FOREST_ON`         | `ctx->GetOption(RSK_FOREST).Is(RO_CLOSED_FOREST_ON)` |
 | `trick(RT_SPIRIT_CHILD_CHU)`                         | `ctx->GetTrickOption(RT_SPIRIT_CHILD_CHU)`           |
 | `is_child()`, `is_adult()`, `at_day()`, `at_night()` | `logic->IsChild`, etc.                               |
+
+---
+
+## Enums And Disambiguation
+
+RLS supports both project-owned enums and host-owned enum references:
+
+```RLS
+enum Color { RED, GREEN = 3 }
+extern enum Item { RG_HOOKSHOT, RG_*, *_KEY }
+```
+
+- Use bare enum values when they are unique.
+- If a value name is ambiguous across enums, use dotted form: `EnumName.ValueName`.
+- `extern enum` supports wildcard entries (`*` globs) for host registries.
+- `enum -> int` and `int -> enum` conversions are supported in typed contexts.
 
 ---
 

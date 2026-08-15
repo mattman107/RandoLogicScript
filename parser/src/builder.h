@@ -36,6 +36,7 @@ using selector = tao::pegtl::parse_tree::selector<
 		grammar::ident,
 		grammar::match_default,
 		grammar::integer,
+		grammar::glob_pattern,
 		grammar::string_literal,
 		grammar::atom_keyword,
 		grammar::invoke_suffix,
@@ -44,7 +45,6 @@ using selector = tao::pegtl::parse_tree::selector<
 		grammar::mul_div_op,
 		grammar::add_sub_op,
 		grammar::section_kind,
-		grammar::time_prop,
 		grammar::kw_not,       // marker: unary "not"
 		grammar::kw_here,      // `here` keyword atom (resolves to current region)
 		grammar::trailing_or   // marker: fallthrough in match arms
@@ -59,10 +59,12 @@ using selector = tao::pegtl::parse_tree::selector<
 		grammar::extend_decl,
 		grammar::define_decl,
 		grammar::extern_define_decl,
-		// Region properties
-		grammar::name_prop,
-		grammar::scene_prop,
-		grammar::areas_prop,
+		grammar::enum_decl,
+		grammar::extern_enum_decl,
+		grammar::enum_member,
+		grammar::extern_enum_entry,
+		// Region data
+		grammar::region_data_entry,
 		// Sections & entries
 		grammar::section,
 		grammar::entry,
@@ -71,10 +73,12 @@ using selector = tao::pegtl::parse_tree::selector<
 		// Expressions
 		grammar::invoke_call,
 		grammar::call,
+		grammar::member_access,
 		grammar::named_arg,
 		grammar::match_expr,
 		grammar::match_arm,
-		grammar::match_pattern
+		grammar::match_pattern,
+		grammar::list_expr
 	>,
 
 	// -- Transparent wrappers (fold when single child) ------------------------

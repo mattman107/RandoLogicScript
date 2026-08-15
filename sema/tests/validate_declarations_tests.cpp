@@ -19,7 +19,23 @@ static std::pair<Project, std::vector<Diagnostic>> validateFromSource(
 	const std::string& source)
 {
 	Project project;
-	project.files.push_back(rls::parser::ParseString(source));
+	const std::string hostItemEnum = source.find("enum Item") == std::string::npos
+		? "extern enum Item { RG_* }\n"
+		: "";
+	const std::string hostSettingEnum = source.find("enum Setting") == std::string::npos
+		? "extern enum Setting { RSK_*, RO_* }\n"
+		: "";
+	const std::string hostRegionEnum = source.find("enum Region") == std::string::npos
+		? "extern enum Region { RR_* }\n"
+		: "";
+	const std::string hostCheckEnum = source.find("enum Check") == std::string::npos
+		? "extern enum Check { RC_* }\n"
+		: "";
+	project.files.push_back(rls::parser::ParseString(
+		hostItemEnum + hostSettingEnum + hostRegionEnum + hostCheckEnum
+		+ "extern enum Distance { ED_* }\n"
+		+ "extern define setting(key: Setting) -> Int\n"
+		+ source));
 	collectDeclarations(project);
 	resolveTypes(project);
 	auto diags = validateDeclarations(project);
@@ -39,6 +55,18 @@ static size_t countWarnings(const std::vector<Diagnostic>& diags) {
 	for (const auto& d : diags)
 		if (d.level == DiagnosticLevel::Warning) ++n;
 	return n;
+}
+
+TEST(ValidateDeclarations, DuplicateRegionDataKey) {
+	auto [project, diags] = validateFromSource(
+		"region RR_FOYER {\n"
+		"    name: \"First\"\n"
+		"    name: \"Second\"\n"
+		"}\n");
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_EQ(diags[0].message, "duplicate data key 'name' in region 'RR_FOYER'");
+	EXPECT_EQ(diags[0].span.start.line, 9u);
+	EXPECT_EQ(diags[0].span.start.column, 5u);
 }
 
 // == Extend-region target exists ==============================================
@@ -332,7 +360,7 @@ TEST(ValidateDeclarations, EntryConditionNonBool) {
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("RC_POT"), std::string::npos);
 	EXPECT_NE(diags[0].message.find("Bool"), std::string::npos);
-	EXPECT_NE(diags[0].message.find("Item"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Enum"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, EntryConditionNonBoolInExtend) {
@@ -348,7 +376,7 @@ TEST(ValidateDeclarations, EntryConditionNonBoolInExtend) {
 		"}\n");
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("RC_POT"), std::string::npos);
-	EXPECT_NE(diags[0].message.find("Item"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("Enum"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, EntryConditionNonBoolExit) {
@@ -387,6 +415,20 @@ TEST(ValidateDeclarations, EntryConditionSettingBoolCompatible_Ok) {
 		"    }\n"
 		"}\n");
 	EXPECT_EQ(countErrors(diags), 0u);
+}
+
+TEST(ValidateDeclarations, EntryConditionSettingKeyIsNotBool) {
+	auto [project, diags] = validateFromSource(
+		"region RR_FOYER {\n"
+		"    name: \"Foyer\"\n"
+		"    scene: SCENE_SPIRIT_TEMPLE\n"
+		"    locations {\n"
+		"        RC_POT: RSK_SHUFFLE_POTS\n"
+		"    }\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("must be Bool, got Enum"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, MultipleNonBoolConditions) {
@@ -604,7 +646,7 @@ TEST(ValidateDeclarations, ExternDefineTypedDefaultMismatch) {
 		"}\n");
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("default value for parameter 'distance'"), std::string::npos);
-	EXPECT_NE(diags[0].message.find("expected Distance"), std::string::npos);
+	EXPECT_NE(diags[0].message.find("expected enum 'Distance'"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, DefineTypedDefaultMismatch) {
@@ -616,12 +658,27 @@ TEST(ValidateDeclarations, DefineTypedDefaultMismatch) {
 	for (const auto& d : diags) {
 		if (d.level != DiagnosticLevel::Error) continue;
 		if (d.message.find("default value for parameter 'distance'") != std::string::npos
-			&& d.message.find("expected Distance") != std::string::npos) {
+			&& d.message.find("expected enum 'Distance'") != std::string::npos) {
 			found = true;
 			break;
 		}
 	}
 	EXPECT_TRUE(found);
+}
+
+TEST(ValidateDeclarations, DefineEnumDefaultIdentityMismatch) {
+	auto [project, diags] = validateFromSource(
+		"enum Color { RED }\n"
+		"enum Status { ACTIVE }\n"
+		"define select(color: Color = Status.ACTIVE): true\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	auto error = std::find_if(diags.begin(), diags.end(), [](const Diagnostic& diagnostic) {
+		return diagnostic.level == DiagnosticLevel::Error;
+	});
+	ASSERT_NE(error, diags.end());
+	EXPECT_NE(error->message.find("has type enum 'Status'"), std::string::npos);
+	EXPECT_NE(error->message.find("expected enum 'Color'"), std::string::npos);
 }
 
 TEST(ValidateDeclarations, ExternDefineDuplicateParameterName) {
@@ -708,4 +765,119 @@ TEST(ValidateDeclarations, ExternDefineUntypedParamWithoutDefault) {
 		"}\n");
 	ASSERT_EQ(countErrors(diags), 1u);
 	EXPECT_NE(diags[0].message.find("must have a type annotation or a default value"), std::string::npos);
+}
+
+// == Enum validation =========================================================
+
+TEST(ValidateDeclarations, EnumAutoIncrementAndExplicitValues) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { RG_A, RG_B = 4, RG_C }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 0u);
+	ASSERT_TRUE(project.EnumInfos.contains("Item"));
+	const auto& info = project.EnumInfos.at("Item");
+	ASSERT_EQ(info.entries.size(), 3u);
+
+	auto valueAt = [&](size_t i) {
+		return std::get<EnumMemberInfo>(info.entries[i]).value;
+	};
+	ASSERT_TRUE(valueAt(0).has_value());
+	ASSERT_TRUE(valueAt(1).has_value());
+	ASSERT_TRUE(valueAt(2).has_value());
+	EXPECT_EQ(*valueAt(0), 0);
+	EXPECT_EQ(*valueAt(1), 4);
+	EXPECT_EQ(*valueAt(2), 5);
+}
+
+TEST(ValidateDeclarations, EnumDuplicateMemberName) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { RG_A, RG_A }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("duplicate enum member 'RG_A'"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, EnumDuplicateComputedValue) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { RG_A = 3, RG_B = 3 }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("duplicate enum value 3"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, ExternEnumMustHaveAtLeastOneEntry) {
+	auto [project, diags] = validateFromSource(
+		"extern enum Item {}\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("must declare at least one member or wildcard pattern"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, ExternEnumDuplicateExplicitMemberName) {
+	auto [project, diags] = validateFromSource(
+		"extern enum Item { RG_A, RG_A }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	ASSERT_EQ(countErrors(diags), 1u);
+	EXPECT_NE(diags[0].message.find("duplicate enum member 'RG_A' in extern enum 'Item'"), std::string::npos);
+}
+
+TEST(ValidateDeclarations, ExternEnumWildcardOverlapsExplicitMemberWarning) {
+	auto [project, diags] = validateFromSource(
+		"extern enum Item { RG_A, RG_* }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 0u);
+	bool foundWarning = false;
+	for (const auto& d : diags) {
+		if (d.level == DiagnosticLevel::Warning &&
+			d.message.find("wildcard 'RG_*' overlaps explicit member 'RG_A'") != std::string::npos) {
+			foundWarning = true;
+			break;
+		}
+	}
+	EXPECT_TRUE(foundWarning);
+}
+
+TEST(ValidateDeclarations, EnumValueNameCollisionAcrossEnumsWarns) {
+	auto [project, diags] = validateFromSource(
+		"enum Item { SHARED }\n"
+		"enum Reward { SHARED }\n"
+		"region RR_ROOT {\n"
+		"    name: \"Root\"\n"
+		"    scene: SCENE_LINKS_HOUSE\n"
+		"}\n");
+
+	EXPECT_EQ(countErrors(diags), 0u);
+	bool foundWarning = false;
+	for (const auto& d : diags) {
+		if (d.level == DiagnosticLevel::Warning &&
+			d.message.find("enum value 'SHARED' appears in multiple enums") != std::string::npos) {
+			foundWarning = true;
+			break;
+		}
+	}
+	EXPECT_TRUE(foundWarning);
 }

@@ -37,9 +37,10 @@ template<> constexpr const char* parse_errors::message<grammar::match_ternary>  
 
 // -- Keywords -----------------------------------------------------------------
 template<> constexpr const char* parse_errors::message<grammar::kw<grammar::kw_region>> = "expected 'region'";
+template<> constexpr const char* parse_errors::message<grammar::kw<grammar::kw_enum>> = "expected 'enum'";
 
 // -- Structural ---------------------------------------------------------------
-template<> constexpr const char* parse_errors::message<grammar::region_body> = "expected region body (must start with 'scene:')";
+template<> constexpr const char* parse_errors::message<grammar::region_body> = "expected region data or section";
 template<> constexpr const char* parse_errors::message<grammar::no_trailing_or> = "trailing 'or' without a following match arm";
 
 // -- Top-level ----------------------------------------------------------------

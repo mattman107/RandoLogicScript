@@ -93,18 +93,12 @@ struct kw_region : TAO_PEGTL_STRING("region") {};
 struct kw_extend : TAO_PEGTL_STRING("extend") {};
 struct kw_extern : TAO_PEGTL_STRING("extern") {};
 struct kw_define : TAO_PEGTL_STRING("define") {};
+struct kw_enum : TAO_PEGTL_STRING("enum") {};
 
 // Region sections
 struct kw_events : TAO_PEGTL_STRING("events") {};
 struct kw_locations : TAO_PEGTL_STRING("locations") {};
 struct kw_exits : TAO_PEGTL_STRING("exits") {};
-
-// Region properties
-struct kw_name : TAO_PEGTL_STRING("name") {};
-struct kw_scene : TAO_PEGTL_STRING("scene") {};
-struct kw_time_passes : TAO_PEGTL_STRING("time_passes") {};
-struct kw_no_time_passes : TAO_PEGTL_STRING("no_time_passes") {};
-struct kw_areas : TAO_PEGTL_STRING("areas") {};
 
 // Boolean literals and aliases
 struct kw_true : TAO_PEGTL_STRING("true") {};
@@ -160,22 +154,16 @@ struct kw : seq<str, not_at<ident_other>> {};
 /// Listed longest-first where prefixes overlap (e.g. `no_time_passes`
 /// before `not`, `is_vanilla`/`is_mq`/`is_child`/`is_adult` before `is`).
 struct reserved : sor<
-	// Multi-word / long keywords first (prefix-safe ordering)
-	kw<kw_no_time_passes>,
-	kw<kw_time_passes>,
 	// Top-level declarations
 	kw<kw_region>,
 	kw<kw_extend>,
 	kw<kw_extern>,
 	kw<kw_define>,
+	kw<kw_enum>,
 	// Region sections
 	kw<kw_events>,
 	kw<kw_locations>,
 	kw<kw_exits>,
-	// Region properties
-	kw<kw_name>,
-	kw<kw_scene>,
-	kw<kw_areas>,
 	// Boolean literals and aliases
 	kw<kw_true>,
 	kw<kw_false>,
@@ -209,11 +197,14 @@ struct string_literal : seq<one<'"'>, star<string_char>, must<one<'"'>>> {};
 
 struct open_brace    : one<'{'> {};
 struct close_brace   : one<'}'> {};
+struct open_bracket  : one<'['> {};
+struct close_bracket : one<']'> {};
 struct open_paren    : one<'('> {};
 struct close_paren   : one<')'> {};
 struct colon         : one<':'> {};
 struct comma         : one<','> {};
 struct question_mark : one<'?'> {};
+struct dot           : one<'.'> {};
 struct arrow         : string<'-', '>'> {};
 
 // == Operators ================================================================
@@ -244,6 +235,9 @@ struct op_slash : one<'/'> {};
 // Forward declaration — defined below after ternary.
 struct expr;
 
+/// List literal: `[value, ...]`.
+struct list_expr : seq<open_bracket, _, opt<list<expr, seq<_, comma, _>>>, _, close_bracket> {};
+
 // -- Atoms & primary expressions ----------------------------------------------
 
 /// Keyword atoms that evaluate to a value by themselves.
@@ -253,10 +247,10 @@ struct atom_keyword : sor<
 	kw<kw_here>          // resolves to the current region's name
 > {};
 
-/// atom = atom_keyword | IDENT | NUMBER
+/// atom = atom_keyword | STRING | IDENT | NUMBER
 /// (IDENT and NUMBER are tried last; call / match are
 /// handled separately by `primary` so they take priority.)
-struct atom : sor<atom_keyword, ident, integer> {};
+struct atom : sor<atom_keyword, string_literal, ident, integer> {};
 
 /// Named argument:  IDENT ":" expr
 struct named_arg : seq<ident, _, colon, _, expr> {};
@@ -271,6 +265,10 @@ struct arg_list : opt<list<arg, seq<_, comma, _>>> {};
 
 /// Function call:  IDENT "(" arg_list ")"
 struct call : seq<ident, _, open_paren, must<_, arg_list, _, close_paren>> {};
+
+/// Member access: IDENT "." IDENT  (enum type disambiguation)
+/// Example: Item.RG_HOOKSHOT
+struct member_access : seq<ident, dot, ident> {};
 
 /// Invoke-call suffix for callable evaluation: "()".
 struct invoke_suffix : seq<open_paren, _, close_paren> {};
@@ -297,13 +295,14 @@ struct match_expr;
 /// Parenthesised expression: "(" expr ")"
 struct paren_expr : seq<open_paren, must<_, expr, _, close_paren>> {};
 
-/// primary = invoke_call | call | match_expr | atom | "(" expr ")"
+/// primary = invoke_call | call | member_access | match_expr | list | atom | "(" expr ")"
 ///
 /// Ordering matters:
 ///   - `invoke_call` before `call` (both start with a call prefix)
-///   - `call` before `atom` (both start with `ident`, but call continues with "(")
+///   - `call` before `member_access` and `atom` (all start with `ident`)
+///   - `member_access` before `atom` (both start with `ident`)
 ///   - `match_expr` before `atom` (match starts with `kw_match` keyword)
-struct primary : sor<invoke_call, call, match_expr, paren_expr, atom> {};
+struct primary : sor<invoke_call, call, member_access, match_expr, list_expr, paren_expr, atom> {};
 
 // -- Unary / binary / ternary -------------------------------------------------
 
@@ -418,18 +417,11 @@ struct section : seq<section_kind, must<_, open_brace, _, star<seq<entry, _>>, c
 
 // -- Region -------------------------------------------------------------------
 
-/// region_props = "name:" STRING "scene:" IDENT ("time_passes" | "no_time_passes")? ("areas:" ident_list)?
-///
-/// Name and scene are required; time_passes variant and areas are optional.
-/// Order-sensitive: name first, then scene, time_passes variant, areas.
-struct name_prop       : seq<kw<kw_name>, must<_, colon, _, string_literal>> {};
-struct scene_prop      : seq<kw<kw_scene>, must<_, colon, _, ident>> {};
-struct time_prop       : sor<kw<kw_no_time_passes>, kw<kw_time_passes>> {};
-struct areas_prop      : seq<kw<kw_areas>, must<_, colon, _, ident_list>> {};
-struct region_props    : seq<name_prop, _, scene_prop, _, opt<seq<time_prop, _>>, opt<seq<areas_prop, _>>> {};
+/// region_data_entry = IDENT ":" expr
+struct region_data_entry : seq<ident, must<_, colon, _, expr>> {};
 
-/// region_body = region_props section*
-struct region_body : seq<region_props, star<seq<section, _>>> {};
+/// region_body = region_data_entry* section*
+struct region_body : seq<star<seq<region_data_entry, _>>, star<seq<section, _>>> {};
 
 /// region = "region" IDENT "{" region_body "}"
 struct region_decl : seq<kw<kw_region>, must<_, ident, _, open_brace, _, region_body, _, close_brace>> {};
@@ -455,15 +447,49 @@ struct define_decl : seq<
 
 /// extern define = "extern" "define" IDENT "(" params? ")" "->" type
 struct extern_define_decl : seq<
-	kw<kw_extern>, must<_, kw<kw_define>, _, ident, _,
+	kw<kw_extern>, _, kw<kw_define>, must<_, ident, _,
 	open_paren, _, opt<params>, _, close_paren, _,
 	arrow, _, type>
 > {};
 
+/// enum_member = IDENT ("=" INTEGER)?
+struct enum_member : seq<ident, opt<seq<_, one<'='>, _, integer>>> {};
+
+/// A wildcard glob pattern used in extern enum entries, requires at least one '*'.
+/// Examples: RG_*, *_KEY, R*_BOSS
+struct glob_char : sor<alnum, one<'_'>> {};
+struct glob_pattern : seq<star<glob_char>, one<'*'>, star<sor<glob_char, one<'*'>>>> {};
+
+/// extern_enum_entry = enum_member | glob_pattern
+struct extern_enum_entry : sor<glob_pattern, enum_member> {};
+
+/// enum = "enum" IDENT "{" enum_member ("," enum_member)* "}"
+struct enum_decl : seq<
+	kw<kw_enum>, must<_, ident, _,
+	open_brace, _,
+	opt<list<enum_member, seq<_, comma, _>>>, _,
+	close_brace>
+> {};
+
+/// extern enum = "extern" "enum" IDENT "{" extern_enum_entry ("," extern_enum_entry)* "}"
+struct extern_enum_decl : seq<
+	kw<kw_extern>, _, kw<kw_enum>, must<_, ident, _,
+	open_brace, _,
+	opt<list<extern_enum_entry, seq<_, comma, _>>>, _,
+	close_brace>
+> {};
+
 // -- Top-level file -----------------------------------------------------------
 
-/// declaration = region | extend | extern define | define
-struct declaration : sor<region_decl, extend_decl, extern_define_decl, define_decl> {};
+/// declaration = region | extend | extern enum | extern define | define | enum
+struct declaration : sor<
+	region_decl,
+	extend_decl,
+	extern_enum_decl,
+	extern_define_decl,
+	define_decl,
+	enum_decl
+> {};
 
 /// file = _ (declaration _)* eof
 /// Named `rls_file` to avoid clashing with any PEGTL or std types.

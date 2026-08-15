@@ -30,6 +30,14 @@ TEST(ExprTests, Identifier) {
 	EXPECT_EQ(std::get<Identifier>(expr->node).name, "RG_HOOKSHOT");
 }
 
+TEST(ExprTests, MemberExpr) {
+	auto expr = makeExpr(MemberExpr(Name("Color"), Name("RED")));
+	ASSERT_TRUE(std::holds_alternative<MemberExpr>(expr->node));
+	const auto& member = std::get<MemberExpr>(expr->node);
+	EXPECT_EQ(member.object, "Color");
+	EXPECT_EQ(member.member, "RED");
+}
+
 // == Compound expression nodes ================================================
 
 TEST(ExprTests, UnaryNot) {
@@ -234,7 +242,6 @@ TEST(ExprTests, NestedBinaryExpressions) {
 // == Top-level declarations ===================================================
 
 TEST(DeclTests, RegionDecl) {
-	// region RR_SPIRIT_TEMPLE_FOYER { scene: SCENE_SPIRIT_TEMPLE, exits { ... } }
 	std::vector<Entry> exits;
 	exits.emplace_back(
 		Name("RR_SPIRIT_TEMPLE_ENTRYWAY"),
@@ -243,44 +250,49 @@ TEST(DeclTests, RegionDecl) {
 
 	std::vector<Section> sections;
 	sections.emplace_back(SectionKind::Exits, std::move(exits));
+	std::vector<RegionDataEntry> data;
+	data.emplace_back(Name("name"), makeExpr(StringLiteral{"Spirit Temple Foyer"}));
+	data.emplace_back(Name("scene"), makeExpr(Identifier{Name("SCENE_SPIRIT_TEMPLE")}));
 
 	RegionDecl region(
 		Name("RR_SPIRIT_TEMPLE_FOYER"),
 		RegionBody(
-			"Spirit Temple Foyer",
-			Name("SCENE_SPIRIT_TEMPLE"),
-			TimePasses::Auto,
-			{},
+			std::move(data),
 			std::move(sections)
 		)
 	);
 
 	EXPECT_EQ(region.key, "RR_SPIRIT_TEMPLE_FOYER");
-	EXPECT_EQ(region.body.name, "Spirit Temple Foyer");
-	ASSERT_TRUE(region.body.scene.has_value());
-	EXPECT_EQ(region.body.scene.value(), "SCENE_SPIRIT_TEMPLE");
-	EXPECT_EQ(region.body.timePasses, TimePasses::Auto);
+	ASSERT_EQ(region.body.data.size(), 2u);
+	ASSERT_NE(region.body.findData("name"), nullptr);
+	EXPECT_EQ(std::get<StringLiteral>(region.body.findData("name")->value->node).value, "Spirit Temple Foyer");
+	ASSERT_NE(region.body.findData("scene"), nullptr);
+	EXPECT_EQ(std::get<Identifier>(region.body.findData("scene")->value->node).name, "SCENE_SPIRIT_TEMPLE");
 	ASSERT_EQ(region.body.sections.size(), 1u);
 	EXPECT_EQ(region.body.sections[0].kind, SectionKind::Exits);
 	ASSERT_EQ(region.body.sections[0].entries.size(), 1u);
 	EXPECT_EQ(region.body.sections[0].entries[0].name, "RR_SPIRIT_TEMPLE_ENTRYWAY");
 }
 
-TEST(DeclTests, RegionWithTimePasses) {
+TEST(DeclTests, RegionDataPreservesLists) {
+	std::vector<ExprPtr> areas;
+	areas.push_back(makeExpr(Identifier{Name("RA_CASTLE_GROUNDS")}));
+	std::vector<RegionDataEntry> data;
+	data.emplace_back(Name("areas"), makeExpr(ListExpr(std::move(areas))));
+
 	RegionDecl region(
 		Name("RR_HC_GARDEN"),
 		RegionBody(
-			"Hyrule Castle Garden",
-			Name("SCENE_CASTLE_COURTYARD_GUARDS_DAY"),
-			TimePasses::No,
-			std::vector<Name>{Name("RA_CASTLE_GROUNDS")},
+			std::move(data),
 			{}
 		)
 	);
 
-	EXPECT_EQ(region.body.timePasses, TimePasses::No);
-	ASSERT_EQ(region.body.areas.size(), 1u);
-	EXPECT_EQ(region.body.areas[0], "RA_CASTLE_GROUNDS");
+	const auto* areasEntry = region.body.findData("areas");
+	ASSERT_NE(areasEntry, nullptr);
+	const auto& list = std::get<ListExpr>(areasEntry->value->node);
+	ASSERT_EQ(list.elements.size(), 1u);
+	EXPECT_EQ(std::get<Identifier>(list.elements[0]->node).name, "RA_CASTLE_GROUNDS");
 }
 
 TEST(DeclTests, ExtendRegionDecl) {
@@ -375,6 +387,37 @@ TEST(DeclTests, ExternDefineDecl) {
 	EXPECT_TRUE(std::holds_alternative<BoolLiteral>(ext.params[1].defaultValue->node));
 }
 
+TEST(DeclTests, EnumDecl) {
+	std::vector<EnumMemberDecl> members;
+	members.emplace_back(Name("RED"));
+	members.emplace_back(Name("GREEN"), 3);
+
+	EnumDecl decl(Name("Color"), std::move(members));
+
+	EXPECT_EQ(decl.name, "Color");
+	ASSERT_EQ(decl.members.size(), 2u);
+	EXPECT_EQ(decl.members[0].name, "RED");
+	EXPECT_FALSE(decl.members[0].explicitValue.has_value());
+	EXPECT_EQ(decl.members[1].name, "GREEN");
+	ASSERT_TRUE(decl.members[1].explicitValue.has_value());
+	EXPECT_EQ(*decl.members[1].explicitValue, 3);
+}
+
+TEST(DeclTests, ExternEnumDecl) {
+	std::vector<ExternEnumEntryDecl> entries;
+	entries.emplace_back(EnumMemberDecl(Name("RG_HOOKSHOT")));
+	entries.emplace_back(EnumPatternDecl("RG_*"));
+
+	ExternEnumDecl decl(Name("Item"), std::move(entries));
+
+	EXPECT_EQ(decl.name, "Item");
+	ASSERT_EQ(decl.entries.size(), 2u);
+	ASSERT_TRUE(std::holds_alternative<EnumMemberDecl>(decl.entries[0]));
+	ASSERT_TRUE(std::holds_alternative<EnumPatternDecl>(decl.entries[1]));
+	EXPECT_EQ(std::get<EnumMemberDecl>(decl.entries[0]).name, "RG_HOOKSHOT");
+	EXPECT_EQ(std::get<EnumPatternDecl>(decl.entries[1]).pattern, "RG_*");
+}
+
 // == File =====================================================================
 
 TEST(FileTests, EmptyFile) {
@@ -394,9 +437,12 @@ TEST(FileTests, FileWithMixedDeclarations) {
 	file.path = "test.rls";
 
 	// Add a region
+	std::vector<RegionDataEntry> regionData;
+	regionData.emplace_back(Name("name"), makeExpr(StringLiteral{"Test Region"}));
+	regionData.emplace_back(Name("scene"), makeExpr(Identifier{Name("SCENE_TEST")}));
 	file.declarations.emplace_back(RegionDecl(
 		Name("RR_TEST_REGION"),
-		RegionBody("Test Region", Name("SCENE_TEST"), TimePasses::Auto, {}, {})
+		RegionBody(std::move(regionData), {})
 	));
 
 	// Add a define
@@ -434,9 +480,12 @@ TEST(ProjectTests, AllDeclarationsAcrossFiles) {
 	// File 1: one region
 	File file1;
 	file1.path = "spirit_temple.rls";
+	std::vector<RegionDataEntry> regionData;
+	regionData.emplace_back(Name("name"), makeExpr(StringLiteral{"Spirit Temple Foyer"}));
+	regionData.emplace_back(Name("scene"), makeExpr(Identifier{Name("SCENE_SPIRIT_TEMPLE")}));
 	file1.declarations.emplace_back(RegionDecl(
 		Name("RR_SPIRIT_TEMPLE_FOYER"),
-		RegionBody("Spirit Temple Foyer", Name("SCENE_SPIRIT_TEMPLE"), TimePasses::Auto, {}, {})
+		RegionBody(std::move(regionData), {})
 	));
 
 	// File 2: one define + one extern define
@@ -511,11 +560,12 @@ TEST(TypeTableTests, SetAndGetExprType) {
 TEST(TypeTableTests, SetAndGetParamType) {
 	Param param(Name("distance"), std::nullopt, makeExpr(Identifier{Name("ED_CLOSE")}));
 	Project project;
-	project.setType(&param, Type::Distance);
+	project.setType(&param, Type::Enum);
+	project.setEnumType(&param, "Distance");
 
 	auto result = project.getType(&param);
 	ASSERT_TRUE(result.has_value());
-	EXPECT_EQ(result.value(), Type::Distance);
+	EXPECT_EQ(result.value(), Type::Enum);
 }
 
 TEST(TypeTableTests, OverwriteType) {
@@ -535,11 +585,12 @@ TEST(TypeTableTests, DistinctExprsHaveDistinctTypes) {
 
 	project.setType(boolExpr.get(), Type::Bool);
 	project.setType(intExpr.get(), Type::Int);
-	project.setType(identExpr.get(), Type::Item);
+	project.setType(identExpr.get(), Type::Enum);
+	project.setEnumType(identExpr.get(), "Item");
 
 	EXPECT_EQ(project.getType(boolExpr.get()).value(), Type::Bool);
 	EXPECT_EQ(project.getType(intExpr.get()).value(), Type::Int);
-	EXPECT_EQ(project.getType(identExpr.get()).value(), Type::Item);
+	EXPECT_EQ(project.getType(identExpr.get()).value(), Type::Enum);
 }
 
 TEST(TypeTableTests, MixedExprAndParamKeys) {
@@ -548,10 +599,11 @@ TEST(TypeTableTests, MixedExprAndParamKeys) {
 	Param param(Name("scene"), std::make_optional<TypeRef>(Name("Scene")), nullptr);
 
 	project.setType(expr.get(), Type::Int);
-	project.setType(&param, Type::Scene);
+	project.setType(&param, Type::Enum);
+	project.setEnumType(&param, "Scene");
 
 	EXPECT_EQ(project.getType(expr.get()).value(), Type::Int);
-	EXPECT_EQ(project.getType(&param).value(), Type::Scene);
+	EXPECT_EQ(project.getType(&param).value(), Type::Enum);
 }
 
 TEST(TypeTableTests, UnknownPointerReturnsNullopt) {
@@ -583,8 +635,10 @@ TEST(TypeTableTests, PointerStabilityAfterProjectFilesGrow) {
 	const Param* paramPtr = &decl.params[0];
 	const Expr* bodyPtr = decl.body.get();
 
-	project.setType(paramPtr, Type::Distance);
-	project.setType(bodyPtr, Type::Distance);
+	project.setType(paramPtr, Type::Enum);
+	project.setEnumType(paramPtr, "Distance");
+	project.setType(bodyPtr, Type::Enum);
+	project.setEnumType(bodyPtr, "Distance");
 
 	// Add more files — vector may reallocate File storage, but
 	// the Decl/Param/Expr objects are heap-allocated and stable.
@@ -599,6 +653,110 @@ TEST(TypeTableTests, PointerStabilityAfterProjectFilesGrow) {
 	}
 
 	// Original pointers still resolve correctly.
-	EXPECT_EQ(project.getType(paramPtr).value(), Type::Distance);
-	EXPECT_EQ(project.getType(bodyPtr).value(), Type::Distance);
+	EXPECT_EQ(project.getType(paramPtr).value(), Type::Enum);
+	EXPECT_EQ(project.getType(bodyPtr).value(), Type::Enum);
+}
+
+// == Enum type side table ====================================================
+
+TEST(EnumTypeTableTests, EmptyByDefault) {
+	Project project;
+	auto expr = makeExpr(Identifier{Name("RG_HOOKSHOT")});
+	EXPECT_FALSE(project.getEnumType(expr.get()).has_value());
+}
+
+TEST(EnumTypeTableTests, SetAndGetExprEnumType) {
+	Project project;
+	auto expr = makeExpr(Identifier{Name("RG_HOOKSHOT")});
+	project.setType(expr.get(), Type::Enum);
+	project.setEnumType(expr.get(), "Item");
+
+	auto enumType = project.getEnumType(expr.get());
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Item");
+}
+
+TEST(EnumTypeTableTests, SetAndGetParamEnumType) {
+	Project project;
+	Param param(Name("x"), std::nullopt, nullptr);
+	project.setType(&param, Type::Enum);
+	project.setEnumType(&param, "Distance");
+
+	auto enumType = project.getEnumType(&param);
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "Distance");
+}
+
+TEST(EnumTypeTableTests, OverwriteEnumType) {
+	Project project;
+	auto expr = makeExpr(Identifier{Name("x")});
+	project.setEnumType(expr.get(), "Item");
+	project.setEnumType(expr.get(), "CustomItem");
+
+	auto enumType = project.getEnumType(expr.get());
+	ASSERT_TRUE(enumType.has_value());
+	EXPECT_EQ(*enumType, "CustomItem");
+}
+
+// == Enum metadata registry ==================================================
+
+TEST(EnumRegistryTests, RegisterAndLookupEnum) {
+	Project project;
+	EnumInfo info(
+		Name("CustomEnum"),
+		EnumKind::Normal,
+		Type::Int,
+		{
+			EnumMemberInfo{Name("A"), 0, {}},
+			EnumMemberInfo{Name("B"), 1, {}},
+		}
+	);
+
+	project.registerEnum(std::move(info));
+
+	const auto* resolved = project.getEnumInfo("CustomEnum");
+	ASSERT_NE(resolved, nullptr);
+	EXPECT_EQ(resolved->kind, EnumKind::Normal);
+	EXPECT_EQ(resolved->underlyingType, Type::Int);
+	ASSERT_EQ(resolved->entries.size(), 2u);
+	ASSERT_TRUE(isEnumMemberEntry(resolved->entries[0]));
+	ASSERT_TRUE(isEnumMemberEntry(resolved->entries[1]));
+
+	const auto& memberA = std::get<EnumMemberInfo>(resolved->entries[0]);
+	const auto& memberB = std::get<EnumMemberInfo>(resolved->entries[1]);
+
+	EXPECT_EQ(memberA.name, "A");
+	ASSERT_TRUE(memberA.value.has_value());
+	EXPECT_EQ(*memberA.value, 0);
+	EXPECT_EQ(memberB.name, "B");
+	ASSERT_TRUE(memberB.value.has_value());
+	EXPECT_EQ(*memberB.value, 1);
+}
+
+TEST(EnumRegistryTests, RegisterExternEnumMemberFromPattern) {
+	Project project;
+	EnumInfo info(
+		Name("Item"),
+		EnumKind::Extern,
+		Type::Int,
+		{
+			EnumPatternInfo{"RG_*", {}},
+		}
+	);
+
+	project.registerEnum(std::move(info));
+
+	const auto* resolved = project.getEnumInfo("Item");
+	ASSERT_NE(resolved, nullptr);
+	EXPECT_EQ(resolved->kind, EnumKind::Extern);
+	ASSERT_EQ(resolved->entries.size(), 1u);
+	ASSERT_TRUE(isEnumPatternEntry(resolved->entries[0]));
+
+	const auto& pattern = std::get<EnumPatternInfo>(resolved->entries[0]);
+	EXPECT_EQ(pattern.pattern, "RG_*");
+}
+
+TEST(EnumRegistryTests, MissingEnumReturnsNull) {
+	Project project;
+	EXPECT_EQ(project.getEnumInfo("DoesNotExist"), nullptr);
 }

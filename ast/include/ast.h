@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <map>
 #include <utility>
@@ -47,8 +48,6 @@ enum class BinaryOp {
 };
 
 enum class SectionKind { Events, Locations, Exits };
-
-enum class TimePasses { Auto, Yes, No };
 
 enum class IdentifierKind {
 	Unresolved,
@@ -113,6 +112,11 @@ struct BoolLiteral {
 /// Integer literal: `0`, `1`, `48`, etc.
 struct IntLiteral {
 	int value;
+};
+
+/// String literal: `"text"`.
+struct StringLiteral {
+	std::string value;
 };
 
 /// Named identifier: enum values (`RG_HOOKSHOT`), parameters (`distance`), etc.
@@ -185,9 +189,19 @@ struct InvokeExpr {
 };
 
 /// The `here` keyword: resolves to the current region's name during sema.
-/// Only valid inside region and extend-region entry conditions.
+/// Only valid inside region data and entry conditions.
 struct HereRef {
 	Name resolvedRegion; ///< Filled in by sema; empty until resolved.
+};
+
+/// Member access: `EnumName.ValueName` — dotted enum value disambiguation.
+/// `object` is the enum type name; `member` is the value name.
+struct MemberExpr {
+	Name object;
+	Name member;
+
+	MemberExpr(Name object, Name member)
+		: object(std::move(object)), member(std::move(member)) {}
 };
 
 /// One arm of a `match` expression.
@@ -213,6 +227,14 @@ struct MatchExpr {
 		: discriminant(std::move(discriminant)), arms(std::move(arms)) {}
 };
 
+/// List literal: `[first, second, ...]`.
+struct ListExpr {
+	std::vector<ExprPtr> elements;
+
+	explicit ListExpr(std::vector<ExprPtr> elements)
+		: elements(std::move(elements)) {}
+};
+
 // == Expr wrapper =============================================================
 
 /// The central expression node. Wraps a variant of all expression types plus
@@ -221,14 +243,17 @@ struct Expr {
 	using Variant = std::variant<
 		BoolLiteral,
 		IntLiteral,
+		StringLiteral,
 		Identifier,
+		MemberExpr,
 		UnaryExpr,
 		BinaryExpr,
 		TernaryExpr,
 		CallExpr,
 		InvokeExpr,
 		HereRef,
-		MatchExpr
+		MatchExpr,
+		ListExpr
 	>;
 
 	Variant node;
@@ -280,25 +305,35 @@ struct Section {
 		: kind(kind), entries(std::move(entries)) {}
 };
 
-/// Region body: properties and sections shared by `region` and `extend region`.
+/// One arbitrary data entry in a region body: `key: value`.
+struct RegionDataEntry {
+	Name key;
+	ExprPtr value;
+	Span span;
+
+	RegionDataEntry(Name key, ExprPtr value, Span span = {})
+		: key(std::move(key)), value(std::move(value)), span(std::move(span)) {}
+};
+
+/// Region body: arbitrary data and sections shared by `region` declarations.
 struct RegionBody {
-	std::string name;
-	std::optional<Name> scene;
-	TimePasses timePasses = TimePasses::Auto;
-	std::vector<Name> areas;
+	std::vector<RegionDataEntry> data;
 	std::vector<Section> sections;
 
 	RegionBody(
-		std::string name,
-		std::optional<Name> scene,
-		TimePasses timePasses,
-		std::vector<Name> areas,
+		std::vector<RegionDataEntry> data,
 		std::vector<Section> sections)
-		: name(std::move(name)),
-		  scene(std::move(scene)),
-		  timePasses(timePasses),
-		  areas(std::move(areas)),
+		: data(std::move(data)),
 		  sections(std::move(sections)) {}
+
+	const RegionDataEntry* findData(std::string_view key) const {
+		for (const auto& entry : data) {
+			if (entry.key == key) {
+				return &entry;
+			}
+		}
+		return nullptr;
+	}
 };
 
 // == Top-level declarations ===================================================
@@ -374,8 +409,61 @@ struct ExternDefineDecl {
 		  span(span) {}
 };
 
-/// A top-level declaration: region, extend region, define, or extern define.
-using Decl = std::variant<RegionDecl, ExtendRegionDecl, DefineDecl, ExternDefineDecl>;
+/// One explicit enum member: `NAME` or `NAME = 3`.
+struct EnumMemberDecl {
+	Name name;
+	std::optional<int> explicitValue;
+	Span span;
+
+	EnumMemberDecl(Name name, std::optional<int> explicitValue = std::nullopt,
+	               Span span = {})
+		: name(std::move(name)),
+		  explicitValue(explicitValue),
+		  span(std::move(span)) {}
+};
+
+/// One glob pattern entry for extern enums, e.g. `RG_*`.
+struct EnumPatternDecl {
+	std::string pattern;
+	Span span;
+
+	EnumPatternDecl(std::string pattern, Span span = {})
+		: pattern(std::move(pattern)), span(std::move(span)) {}
+};
+
+using ExternEnumEntryDecl = std::variant<EnumMemberDecl, EnumPatternDecl>;
+
+/// `enum Name { A, B = 2 }`
+struct EnumDecl {
+	Name name;
+	std::vector<EnumMemberDecl> members;
+	Span span;
+
+	EnumDecl(Name name, std::vector<EnumMemberDecl> members, Span span = {})
+		: name(std::move(name)), members(std::move(members)), span(std::move(span)) {}
+};
+
+/// `extern enum Name { A, RG_* }`
+struct ExternEnumDecl {
+	Name name;
+	std::vector<ExternEnumEntryDecl> entries;
+	Span span;
+
+	ExternEnumDecl(Name name, std::vector<ExternEnumEntryDecl> entries,
+	               Span span = {})
+		: name(std::move(name)), entries(std::move(entries)), span(std::move(span)) {}
+};
+
+/// A top-level declaration: region, extend region, define, extern define,
+/// enum, or extern enum.
+using Decl = std::variant<
+	RegionDecl,
+	ExtendRegionDecl,
+	DefineDecl,
+	ExternDefineDecl,
+	EnumDecl,
+	ExternEnumDecl
+>;
 
 // == Diagnostics ==============================================================
 
@@ -411,24 +499,58 @@ struct File {
 enum class Type {
     Bool,       // true, false, always, never, and/or/not, conditions
     Int,        // integer literals, arithmetic results, hearts(), keys(), etc.
+	String,     // string literals
+	List,       // list literals
 	// TODO: Implement parameterized callable syntax (e.g., (Item) -> Bool).
 	Callable,   // generic callable value
 	Condition,  // callable with signature () -> Bool
-    Item,       // RG_*
-    Enemy,      // RE_*
-    Distance,   // ED_*
-    Trick,      // RT_*
-    Setting,    // RSK_* / RO_*
-    Region,     // RR_*
-    Check,      // RC_*
-    Logic,      // LOGIC_*
-    Scene,      // SCENE_*
-    Dungeon,    // DUNGEON_*
-    Area,       // RA_*
-    Trial,      // TK_*
-    WaterLevel, // WL_*
+	Enum,       // user-defined or host-defined enum value, identified by Project metadata
     Void,       // statements / declarations with no value
     Error,      // poison type — inference failed, suppress cascading errors
+};
+
+enum class EnumKind {
+	Normal,
+	Extern,
+};
+
+struct EnumMemberInfo {
+	Name name;
+	std::optional<int> value;
+	Span span;
+};
+
+struct EnumPatternInfo {
+	std::string pattern;
+	Span span;
+};
+
+using EnumEntryInfo = std::variant<EnumMemberInfo, EnumPatternInfo>;
+
+inline bool isEnumMemberEntry(const EnumEntryInfo& entry) {
+	return std::holds_alternative<EnumMemberInfo>(entry);
+}
+
+inline bool isEnumPatternEntry(const EnumEntryInfo& entry) {
+	return std::holds_alternative<EnumPatternInfo>(entry);
+}
+
+struct EnumInfo {
+	Name name;
+	EnumKind kind = EnumKind::Normal;
+	Type underlyingType = Type::Int;
+	std::vector<EnumEntryInfo> entries;
+	Span span;
+
+	EnumInfo() = default;
+
+	EnumInfo(Name name, EnumKind kind, Type underlyingType,
+	         std::vector<EnumEntryInfo> entries, Span span = {})
+		: name(std::move(name)),
+		  kind(kind),
+		  underlyingType(underlyingType),
+		  entries(std::move(entries)),
+		  span(std::move(span)) {}
 };
 
 /// Aggregated AST for all `.rls` files in a project.
@@ -440,6 +562,7 @@ struct Project {
 	std::map<std::string, std::vector<const ExtendRegionDecl*>> ExtendRegionDecls;
 	std::map<std::string, const DefineDecl*> DefineDecls;
 	std::map<std::string, const ExternDefineDecl*> ExternDefineDecls;
+	std::map<std::string, EnumInfo> EnumInfos;
 
 	template <typename T>
 	void setType(const T* node, Type type) {
@@ -450,6 +573,29 @@ struct Project {
 	std::optional<Type> getType(const T* node) const {
 		auto it = TypeTable.find(node);
 		return it != TypeTable.end() ? std::optional(it->second) : std::nullopt;
+	}
+
+	template <typename T>
+	void setEnumType(const T* node, std::string enumName) {
+		EnumTypeTable[node] = std::move(enumName);
+	}
+
+	template <typename T>
+	std::optional<std::string_view> getEnumType(const T* node) const {
+		auto it = EnumTypeTable.find(node);
+		if (it == EnumTypeTable.end()) {
+			return std::nullopt;
+		}
+		return it->second;
+	}
+
+	void registerEnum(EnumInfo info) {
+		EnumInfos[info.name.text] = std::move(info);
+	}
+
+	const EnumInfo* getEnumInfo(std::string_view enumName) const {
+		auto it = EnumInfos.find(std::string(enumName));
+		return it != EnumInfos.end() ? &it->second : nullptr;
 	}
 
 	void setResolvedCallArgs(const CallExpr* node, std::vector<const Expr*> args) {
@@ -463,6 +609,7 @@ struct Project {
 
 private:
 	std::unordered_map<const void*, Type> TypeTable;
+	std::unordered_map<const void*, std::string> EnumTypeTable;
 	std::unordered_map<const CallExpr*, std::vector<const Expr*>> ResolvedCallArgs;
 };
 

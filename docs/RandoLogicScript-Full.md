@@ -72,7 +72,7 @@ Since the language is transpiled (never interpreted at runtime), the syntax is f
 
 ### 3.1 File Structure
 
-Each `.rls` file contains any combination of top-level declarations - `region`, `extend region`, `define`, and `extern define`. A file typically corresponds to one dungeon or overworld area, but can also be a pure library (e.g. `stdlib/enemies.rls` containing only enemy helper `define` functions).
+Each `.rls` file contains any combination of top-level declarations - `region`, `extend region`, `define`, `extern define`, `enum`, and `extern enum`. A file typically corresponds to one dungeon or overworld area, but can also be a pure library (e.g. `stdlib/enemies.rls` containing only enemy helper `define` functions).
 
 The transpiler processes all `.rls` files in the project together. All top-level declarations are globally visible - there is no `import` mechanism. The transpiler derives dependencies from usage during semantic analysis.
 
@@ -95,27 +95,18 @@ extend region RR_SPIRIT_TEMPLE_FOYER {
 
 | Type         | Examples                                                                            | Notes                                                 |
 | ------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `Item`       | `RG_HOOKSHOT`, `RG_FAIRY_BOW`, `RG_BOMB_BAG`                                        | Maps directly to `RG_*` enum values.                  |
-| `Enemy`      | `RE_ARMOS`, `RE_GOLD_SKULLTULA`, `RE_IRON_KNUCKLE`                                  | Maps to `RE_*` enum.                                  |
-| `Distance`   | `ED_CLOSE`, `ED_BOMB_THROW`, `ED_BOOMERANG`, `ED_HOOKSHOT`, `ED_LONGSHOT`, `ED_FAR` | Maps to `ED_*` enum.                                  |
-| `Trick`      | `RT_SPIRIT_CHILD_CHU`, `RT_SPIRIT_WEST_LEDGE`                                       | Maps to `RT_*` enum.                                  |
-| `Setting`    | `RSK_SUNLIGHT_ARROWS`, `RSK_SHUFFLE_DUNGEON_ENTRANCES`                              | Maps to `RSK_*` / `RO_*`.                             |
-| `Region`     | `RR_SPIRIT_TEMPLE_FOYER`, `RR_SPIRIT_TEMPLE_STATUE_ROOM`                            | Maps to `RR_*` enum.                                  |
-| `Check`      | `RC_SPIRIT_TEMPLE_CHILD_BRIDGE_CHEST`                                               | Maps to `RC_*` enum.                                  |
-| `Logic`      | `LOGIC_FORWARDS_SPIRIT_CHILD`, `LOGIC_SPIRIT_PLATFORM_LOWERED`                      | Maps to `LOGIC_*` flags.                              |
-| `Scene`      | `SCENE_SPIRIT_TEMPLE`                                                               | Maps to `SceneID` enum.                               |
-| `Dungeon`    | `SPIRIT_TEMPLE`                                                                     | Maps to `DungeonKey` enum.                            |
-| `Area`       | `RA_CASTLE_GROUNDS`, `RA_HYRULE_FIELD`                                              | Maps to `RA_*` enum. Used in region `areas` property. |
-| `Trial`      | `TK_LIGHT_TRIAL`, `TK_FOREST_TRIAL`                                                 | Maps to `TK_*` enum. Used with `trial_skipped()`.     |
-| `WaterLevel` | `WL_HIGH`, `WL_LOW`, `WL_MID`                                                       | Maps to `WL_*` enum. Used with `water_level()`.       |
+| `bool`       | `true`, `false`, comparisons, logical expressions                                  | Boolean value.                                        |
+| `int`        | `0`, `3`, arithmetic expressions                                                    | Integer value.                                        |
+| `Condition`  | `has(RG_HOOKSHOT)`, a zero-argument callable                                        | Callable condition.                                   |
+| Enum name    | `Item`, `Setting`, `Region`, `Check`, `Distance`, `Color`, `EnemyDistance`          | A first-class enum type declared by `enum` or `extern enum`. |
 
-All names use the **same identifiers as the C++ enums**. This eliminates a mapping layer, makes cross-referencing trivial, and allows the transpiler to emit enum values directly. Names are validated at transpile time against the enum registry generated from `randomizerEnums.h`.
+Host enum names use the **same identifiers as their target-language enums**. This keeps generated references straightforward; RLS resolves only its declared enum members and patterns, while the target compiler validates host-specific spelling.
 
 ### 3.3 Type Inference
 
 RLS does not require type annotations in most cases - the transpiler infers types at transpile time from context:
 
-1. **Enum identifiers are self-typing.** Every enum prefix maps to a unique type: `RG_*` → `Item`, `RE_*` → `Enemy`, `ED_*` → `Distance`, `RT_*` → `Trick`, `RSK_*`/`RO_*` → `Setting`, etc. The transpiler resolves the type from the enum registry. Passing `has(RE_ARMOS)` is a type error - `RE_ARMOS` is an `Enemy`, not an `Item`.
+1. **Enum identifiers are resolved from declarations.** Normal and extern enum declarations provide known members and wildcard-pattern matches. Host value categories, including setting keys, regions, and checks, are ordinary named enums; for example `extern enum Setting { RSK_*, RO_* }`, `extern enum Region { RR_* }`, and `extern enum Check { RC_* }`. If a bare identifier matches multiple enums, this is a hard error and requires dotted disambiguation (`EnumName.ValueName`).
 
 2. **Host-call signatures are declared with `extern define`.** For example, `extern define has(item: Item) -> bool`, `extern define keys(scene: Scene, n: int) -> int`, and `extern define trick(key: Trick) -> bool`. The transpiler validates arguments against these declared signatures.
 
@@ -125,7 +116,47 @@ RLS does not require type annotations in most cases - the transpiler infers type
 
 5. **Literals and booleans.** Number literals are `int`. `true`/`false` (and their aliases `always`/`never`) are `bool`. `and`/`or`/`not` produce `bool`. Condition expressions in `locations`/`exits`/`events` must be `bool`. Integers have an implicit conversion to `bool` - zero is `false`, non-zero is `true` - so functions returning a count can be used directly in conditions.
 
-Optional type annotations are available for documentation or when inference is ambiguous (e.g. a parameter only used in arithmetic):
+6. **Enum/int implicit conversion is context-aware.**
+   - `enum -> int` is allowed in arithmetic, comparison, and call binding where `int` is expected.
+   - `int -> enum` is allowed where an enum is expected (for example, a typed parameter).
+   - If an integer literal could map to multiple enum identities and there is no explicit enum context, this is a hard ambiguity error requiring explicit disambiguation.
+
+7. **Enum identity is enforced for enum-typed parameters.** Two enum-typed values must belong to the same enum identity when binding enum parameters, unless an explicit `int` conversion path is used.
+
+### 3.4 Enum Declarations And Resolution
+
+RLS supports two enum declaration forms:
+
+```rls
+extern enum Item {
+    RG_HOOKSHOT,
+    RG_*,
+    *_KEY
+}
+
+extern enum Setting {
+    RSK_*,
+    RO_*
+}
+
+extern enum Region { RR_* }
+extern enum Check { RC_* }
+
+enum WaterLevel {
+    WL_LOW = 0,
+    WL_MID,
+    WL_HIGH,
+    WL_LOW_OR_MID,
+    WL_HIGH_OR_MID
+}
+```
+
+- `enum` declares project-owned enums. Members can omit values (auto-increment) or specify explicit integer values.
+- `extern enum` declares host-owned enums. Entries can be explicit members or wildcard patterns (`*` globs).
+- Bare identifiers remain valid when unique. When ambiguous across multiple enums, use dotted syntax: `EnumName.ValueName`.
+- Dotted member expressions always resolve against the named enum and bypass bare-name ambiguity.
+
+Enum names are first-class annotations, so an enum-typed parameter always carries its concrete identity. Optional annotations are also useful for documentation or when inference is ambiguous:
 
 ```rls
 define foo(d: Distance): can_hit_switch(d)
@@ -169,6 +200,34 @@ can_jumpslash()                               # logic->CanJumpslash()
 
 **Operators:** `and`, `or`, `not`, parentheses. Comparisons: `==`, `!=`, `>=`, `<=`, `>`, `<` (with word aliases `is` for `==` and `is not` for `!=`). Arithmetic: `+`, `-`, `*`, `/`. Ternary: `? :`.
 
+#### Enum Declarations, Wildcards, And Dotted Access
+
+Enum disambiguation syntax is explicit:
+
+```rls
+enum Color { RED = 0, BLUE = 1 }
+enum Alert { RED = 0 }
+
+define is_red_alert(value = Alert.RED):
+    value is Alert.RED
+```
+
+Extern enums can include wildcard patterns that are matched against host enum names:
+
+```rls
+extern enum Item {
+    RG_HOOKSHOT,
+    RG_*,
+    *_KEY,
+    R*_BOSS
+}
+```
+
+Rules:
+- Ambiguous bare enum values are rejected with a hard error requiring `EnumName.ValueName`.
+- Member access uses `EnumName.ValueName` and resolves against that enum's identity.
+- Wildcard entries are valid only in `extern enum` declarations.
+
 The word operators `and`/`or`/`not`/`is`/`is not` are used instead of `&&`/`||`/`!`/`==`/`!=` for readability. The symbolic forms remain valid for arithmetic comparisons where word operators would feel unnatural (e.g. `fire_timer() >= 48`).
 
 ```rls
@@ -209,25 +268,27 @@ Key design choices:
 - Enum identifiers used for names, so cross-referencing with the C++ codebase is trivial.
 - Shorter function names (`has`, `can_use`, `flag`, `keys`) for ergonomics - the transpiler maps them to the full C++ method names.
 
-#### Region Properties
+#### Region Data
 
-Regions support properties declared before the section blocks:
+Regions support arbitrary `key: value` data entries before their section blocks. Values are regular RLS expressions, including strings and bracketed lists. The language validates duplicate keys, but each transpiler decides which keys it requires and how to interpret their values.
 
-| Property                         | Syntax                  | Default                 | Notes                                                  |
-| -------------------------------- | ----------------------- | ----------------------- | ------------------------------------------------------ |
-| `name`                           | `name: "Display Name"` | *(required)*            | Human-readable region name for the logic tracker and Archipelago. Supports `\"` and `\\` escapes. |
-| `scene`                          | `scene: SCENE_ID`       | *(required)*            | The scene ID for key counting, variant detection, etc. |
-| `time_passes` / `no_time_passes` | keyword                 | Auto-derived from scene | Whether the game clock advances in this region.        |
-| `areas`                          | `areas: [AREA_ID, ...]` | Auto-derived from scene | The set of hint areas this region belongs to.          |
+The SoH transpiler currently consumes these conventions:
 
-Defaults are derived automatically from the `scene` value - most regions don't need to specify `time_passes` or `areas` explicitly. Use explicit values only when the auto-derived defaults are incorrect (e.g. Hyrule Castle Grounds doesn't have time pass despite being an overworld scene):
+| Key | Value | Default | SoH meaning |
+| --- | --- | --- | --- |
+| `name` | string literal | required | Display name. Supports `\"` and `\\` escapes. |
+| `scene` | `Scene` enum value | required | Scene ID used by SoH region construction. |
+| `timePasses` | `TimePasses.Auto`, `Yes`, or `No` | `Auto` | Whether the game clock advances. |
+| `areas` | `[Area, ...]` | derived from `scene` | Hint areas for the region. |
+
+Other games can declare and consume entirely different data keys. For SoH, use explicit values only when the auto-derived defaults are incorrect (for example, Hyrule Castle Grounds does not have time pass despite being an overworld scene):
 
 ```rls
 region RR_HC_GARDEN {
     name: "Hyrule Castle Garden"
     scene: SCENE_CASTLE_COURTYARD_GUARDS_DAY
-    no_time_passes
-    areas: RA_CASTLE_GROUNDS
+    timePasses: TimePasses.No
+    areas: [RA_CASTLE_GROUNDS]
 
     exits {
         RR_HC_GARDEN_GATE: always
@@ -235,7 +296,7 @@ region RR_HC_GARDEN {
 }
 ```
 
-The C++ transpiler generates the appropriate constructor form: if only `scene` is specified, the 5-argument auto-deriving constructor is used; if `time_passes`/`no_time_passes` or `areas` are specified, the 7-argument explicit constructor is generated.
+The SoH C++ transpiler uses its auto-deriving constructor when `timePasses` is omitted or `Auto` and `areas` is omitted. Any explicit `Yes`/`No` value or `areas` list selects its explicit constructor form.
 
 #### Duplicate Locations Across Regions
 
@@ -476,7 +537,7 @@ Functions returning `int` have implicit `int → bool` conversion (zero is `fals
 
 #### Setting & Trick Semantics
 
-`setting()` and `trick()` return option values that support comparison operators and boolean truthiness:
+`setting()` accepts a host-declared setting-key enum and returns an `int`; `trick()` returns `bool`. Setting values can be compared with option enum values through implicit enum/int conversion, and integer truthiness supports boolean uses:
 
 | Usage                                            | C++ equivalent                                          | Meaning                                    |
 | ------------------------------------------------ | ------------------------------------------------------- | ------------------------------------------ |
@@ -780,15 +841,12 @@ The transpiler bridges these differences:
 ## 7. Grammar (EBNF Sketch)
 
 ```ebnf
-file          = (region | extend | define | extern_define)* ;
+file          = (region | extend | define | extern_define | enum_decl | extern_enum_decl)* ;
 
 region        = "region" IDENT "{" region_body "}" ;
 extend        = "extend" "region" IDENT "{" section* "}" ;
-region_body   = region_props section* ;
-region_props  = "name:" STRING_LITERAL
-                "scene:" IDENT
-                ("time_passes" | "no_time_passes")?
-                ("areas:" ident_list )? ;
+region_body   = region_data_entry* section* ;
+region_data_entry = IDENT ":" expr ;
 
 STRING_LITERAL = '"' ( ESCAPED_CHAR | [^"\\] )* '"' ;
 ESCAPED_CHAR   = '\\' ( '"' | '\\' ) ;
@@ -797,8 +855,18 @@ section       = section_kind "{" entry* "}" ;
 section_kind  = "events" | "locations" | "exits" ;
 entry         = IDENT ":" expr ;
 
+list_literal  = "[" (expr ("," expr)*)? "]" ;
+
 define        = "define" IDENT "(" params? ")" ":" expr ;
 extern_define = "extern" "define" IDENT "(" params? ")" "->" type ;
+
+enum_decl        = "enum" IDENT "{" enum_member_list? "}" ;
+enum_member_list = enum_member ("," enum_member)* ","? ;
+enum_member      = IDENT ("=" NUMBER)? ;
+
+extern_enum_decl   = "extern" "enum" IDENT "{" extern_enum_entry_list? "}" ;
+extern_enum_entry_list = extern_enum_entry ("," extern_enum_entry)* ","? ;
+extern_enum_entry  = IDENT ("=" NUMBER)? | GLOB_PATTERN ;
 
 params        = param ("," param)* ;
 param         = IDENT (":" type)? ("=" expr)? ;
@@ -812,11 +880,13 @@ comp_op       = "==" | "is" | "!=" | "is" "not" | ">=" | "<=" | ">" | "<" ;
 add_sub       = mul_div (("+" | "-") mul_div)* ;
 mul_div       = unary (("*" | "/") unary)* ;
 unary         = "not" unary | primary ;
-primary       = call | match_expr | atom | "(" expr ")" ;
+primary       = call | match_expr | member_expr | atom | "(" expr ")" ;
+
+member_expr   = IDENT "." IDENT ;
 
 match_expr    = "match" IDENT "{" match_arm+ "}" ;
 match_arm     = match_pattern ":" expr trailing_or? ;
-match_pattern = IDENT ("or" IDENT)* ;
+match_pattern = "_" | IDENT ("or" IDENT)* ;
 trailing_or   = "or" ;  /* fallthrough: OR-accumulate with next arm */
 
 call          = IDENT "(" (arg ("," arg)*)? ")" ;
@@ -827,6 +897,7 @@ atom          = "always" | "never"
               | IDENT | NUMBER ;
 
 IDENT         = [A-Za-z_] [A-Za-z0-9_]* ;
+GLOB_PATTERN  = [A-Za-z0-9_*]+ ;
 NUMBER        = [0-9]+ ;
 ident_list    = IDENT ("," IDENT)* ;
 type          = IDENT ;
@@ -836,7 +907,7 @@ Key differences from the existing `LogicExpression` parser:
 - `and`/`or`/`not` keywords instead of `&&`/`||`/`!`. `is`/`is not` as aliases for `==`/`!=`.
 - `always`/`never` as keywords.
 - `match <value> { ... }` expressions with trailing `or` for fallthrough accumulation.
-- File-level structure (`region`, `extend`, `define`, `extern define`).
+- File-level structure (`region`, `extend`, `define`, `extern define`, `enum`, `extern enum`).
 
 ---
 
@@ -852,6 +923,8 @@ Since logic errors can cause softlocks in generated seeds, RLS prioritizes error
 | **Unused define**        | `define foo(): ...` never referenced | `warning: 'foo' is defined but never used.`                                                                                                                            |
 | **Unknown function**     | `can_fly()`                          | `error: unknown function 'can_fly'. Available: can_use, can_kill, ...`                                                                                                 |
 | **Duplicate entry**      | Same check in same region twice      | `error: duplicate location 'RC_SPIRIT_TEMPLE_LOBBY_POT_1' in region 'RR_SPIRIT_TEMPLE_FOYER'.` (Note: the same location in *different* regions is allowed - see §4.3.) |
+| **Ambiguous enum value** | `SHARED_VALUE` exists in two enums   | `error: ambiguous identifier 'SHARED_VALUE'. Use EnumName.ValueName (for example, Color.SHARED_VALUE).`                                                                |
+| **Enum identity mismatch** | Passing `Distance` where `Scene` is expected | `error: enum argument type mismatch: expected 'Scene', got 'Distance'.`                                                                                          |
 
 ---
 
@@ -899,7 +972,7 @@ The `extend region` mechanism allows shuffle features to add locations to region
 The migration will be done as **one large PR** rather than incrementally. This avoids the complexity of maintaining two parallel systems (hand-written and generated C++) and ensures the full logic graph is consistent when it lands.
 
 ### Phase 1 - Parser & C++ Solver Transpiler
-- Implement the RLS parser (lexer, AST, semantic analysis against enum registry).
+- Implement the RLS parser (lexer, AST, semantic analysis against declared enums).
 - Implement the C++ transpiler generating solver lambdas and region definitions.
 - Validate that transpiled output is structurally equivalent to the current hand-written code.
 
@@ -913,7 +986,7 @@ The migration will be done as **one large PR** rather than incrementally. This a
 ### Phase 3 - Archipelago Python Target
 - Implement the Python transpiler producing Archipelago `World` code.
 - Generate Python helper functions mirroring the C++ `Logic` class methods, integrating with the existing `LogicHelpers` module pattern (see §6.2).
-- Generate `item_name_to_id` and `location_name_to_id` from the enum registry.
+- Generate target-specific item and location ID tables from the target integration.
 - Validate against existing Archipelago OoT integration tests.
 
 ### Phase 4 - Full Conversion

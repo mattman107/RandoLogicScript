@@ -97,6 +97,21 @@ TEST(SohExpressions, IntLiteral) {
 		"-7");
 }
 
+TEST(SohExpressions, StringAndListLiterals) {
+	auto expr = sourceToExpression(
+		"define test():\n"
+		"    \"quoted\\\\path \\\"text\\\"\"\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"\"quoted\\\\path \\\"text\\\"\"");
+
+	expr = sourceToExpression(
+		"define test():\n"
+		"    [1, 2]\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr), "{1, 2}");
+}
+
 TEST(SohExpressions, Identifier) {
 	auto expr = sourceToExpression(
 		"define test(item: Item):\n"
@@ -104,6 +119,53 @@ TEST(SohExpressions, Identifier) {
 		"test");
 	EXPECT_EQ(GenerateExpression(expr),
 		"item");
+}
+
+TEST(SohExpressions, EnumIdentifierUsesEnumMetadataNamespace) {
+	auto expr = sourceToExpression(
+		"enum Color { RED }\n"
+		"define test():\n"
+		"    RED\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"Color::RED");
+}
+
+TEST(SohExpressions, ExternEnumIdentifierUsesEnumMetadataNamespace) {
+	auto expr = sourceToExpression(
+		"extern enum Status { ST_ACTIVE }\n"
+		"define test():\n"
+		"    ST_ACTIVE\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"Status::ST_ACTIVE");
+}
+
+TEST(SohExpressions, NormalWaterLevelUsesGeneratedNamespace) {
+	auto expr = sourceToExpression(
+		"enum WaterLevel { WL_LOW, WL_MID, WL_HIGH, WL_LOW_OR_MID, WL_HIGH_OR_MID }\n"
+		"define test():\n"
+		"    WL_HIGH\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"WaterLevel::WL_HIGH");
+}
+
+TEST(SohExpressions, MemberExprUsesQualifiedEnumNamespace) {
+	auto expr = sourceToExpression(
+		"enum Color { RED }\n"
+		"define test():\n"
+		"    Color.RED\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"Color::RED");
+
+	expr = sourceToExpression(
+		"define test():\n"
+		"    Item.RG_HOOKSHOT\n",
+		"test");
+	EXPECT_EQ(GenerateExpression(expr),
+		"RandomizerGet::RG_HOOKSHOT");
 }
 
 TEST(SohExpressions, UnaryNot) {
@@ -266,6 +328,27 @@ TEST(SohExpressions, BinaryArithmetic) {
 		"    8 / 2\n",
 		"test")),
 		"8 / 2");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED, GREEN }\n"
+		"define test():\n"
+		"    Color.RED + 1\n",
+		"test")),
+		"static_cast<int>(Color::RED) + 1");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED, GREEN }\n"
+		"define test():\n"
+		"    Color.RED < Color.GREEN\n",
+		"test")),
+		"static_cast<int>(Color::RED) < static_cast<int>(Color::GREEN)");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED, GREEN }\n"
+		"define test():\n"
+		"    Color.RED == 0\n",
+		"test")),
+		"static_cast<int>(Color::RED) == 0");
 }
 
 TEST(SohExpressions, TernarySimple) {
@@ -388,6 +471,25 @@ TEST(SohExpressions, CallExternDefineReorderedAndDefaultedArgs) {
 		"    host_custom(distance: ED_FAR, item: RG_HOOKSHOT) and host_custom(RG_FAIRY_BOW)\n",
 		"test")),
 		"host_custom(RandomizerGet::RG_HOOKSHOT, EnemyDistance::ED_FAR, false) && host_custom(RandomizerGet::RG_FAIRY_BOW, EnemyDistance::ED_CLOSE, false)");
+}
+
+TEST(SohExpressions, CallEnumToIntEmitsStaticCast) {
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    keys(SCENE_SPIRIT_TEMPLE, ED_CLOSE)\n",
+		"test")),
+		"keys(SceneID::SCENE_SPIRIT_TEMPLE, static_cast<int>(EnemyDistance::ED_CLOSE))");
+}
+
+TEST(SohExpressions, CallIntToEnumEmitsStaticCast) {
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"enum Color { RED = 0, GREEN = 1 }\n"
+		"define accepts_color(c: Enum = RED):\n"
+		"    true\n"
+		"define test():\n"
+		"    accepts_color(1)\n",
+		"test")),
+		"accepts_color(static_cast<Color>(1))");
 }
 
 TEST(SohExpressions, CallEnemyFunctions) {
