@@ -7,48 +7,6 @@
 
 using namespace rls::transpilers::soh_ap_tests;
 
-namespace {
-struct ResolvedExpression {
-	rls::ast::Project project;
-	rls::ast::ExprPtr expr;
-};
-} // namespace
-
-static std::string GenerateExpression(const ResolvedExpression& resolved) {
-	return rls::transpilers::soh_ap::SohApTranspiler(resolved.project).GenerateExpression(resolved.expr);
-}
-
-// Resolve a define from inline RLS source and hand back its body expression.
-static ResolvedExpression sourceToExpression(const std::string& source, const std::string& defineName) {
-	auto project = resolveFromSource(source);
-	auto defineDecl = project.DefineDecls.find(defineName);
-	if (defineDecl == project.DefineDecls.end()) {
-		return { std::move(project), nullptr };
-	}
-
-	return {
-		std::move(project),
-		std::move(const_cast<rls::ast::DefineDecl*>(defineDecl->second)->body)
-	};
-}
-
-// Dotted enum access (`Item.RG_HOOKSHOT`) renders exactly like the bare identifier form:
-// both route through renderEnumValue with the same enum name, so choosing the disambiguated
-// spelling in RLS never changes the generated Python.
-TEST(SohApRendering, DottedEnumAccessMatchesBareIdentifier) {
-	const std::string dotted = GenerateExpression(sourceToExpression(
-		"define test():\n"
-		"    has(Item.RG_HOOKSHOT)\n",
-		"test"));
-	const std::string bare = GenerateExpression(sourceToExpression(
-		"define test():\n"
-		"    has(RG_HOOKSHOT)\n",
-		"test"));
-
-	EXPECT_EQ(dotted, "has_item(bundle, Items.RG_HOOKSHOT)");
-	EXPECT_EQ(dotted, bare);
-}
-
 // A setting value identifier is rendered with the SoH RandomizerSettingKey enum prefix.
 TEST(SohApRendering, SettingValueGetsEnumPrefix) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(

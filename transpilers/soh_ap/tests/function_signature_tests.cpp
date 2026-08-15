@@ -53,12 +53,14 @@ TEST(SohApFunctionSignatures, EnumParamTypesMatchRenderEnumValueClasses) {
 		std::string::npos) << out;
 }
 
-// WaterLevel annotates as Events (its values live in the Events enum), confirming the old
-// `RandoWaterLeve` typo is gone now that the type name is derived from renderEnumValue.
-TEST(SohApFunctionSignatures, WaterLevelParamAnnotatesAsEvents) {
+// WaterLevel is a normal RLS enum, so writeEnums generates a WaterLevel class and the
+// annotation names that class -- rather than the Events class its values used to be folded
+// into. Confirms the type name still tracks renderEnumValue (the old `RandoWaterLeve` typo
+// is gone) and that generated enums annotate under their own name.
+TEST(SohApFunctionSignatures, DeclaredEnumParamAnnotatesAsItsOwnClass) {
 	EXPECT_NE(generateFunctions(
 		"define at_level(wl: WaterLevel):\n"
-		"    true\n").find("def at_level(bundle, wl: Events) -> bool:"),
+		"    true\n").find("def at_level(bundle, wl: WaterLevel) -> bool:"),
 		std::string::npos);
 }
 

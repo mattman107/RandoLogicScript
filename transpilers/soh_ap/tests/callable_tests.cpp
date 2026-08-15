@@ -8,30 +8,6 @@
 
 using namespace rls::transpilers::soh_ap_tests;
 
-namespace {
-struct ResolvedExpression {
-	rls::ast::Project project;
-	rls::ast::ExprPtr expr;
-};
-} // namespace
-
-static std::string GenerateExpression(const ResolvedExpression& resolved) {
-	return rls::transpilers::soh_ap::SohApTranspiler(resolved.project).GenerateExpression(resolved.expr);
-}
-
-static ResolvedExpression sourceToExpression(const std::string& source, const std::string& defineName) {
-	auto project = resolveFromSource(source);
-	auto defineDecl = project.DefineDecls.find(defineName);
-	if (defineDecl == project.DefineDecls.end()) {
-		return { std::move(project), nullptr };
-	}
-
-	return {
-		std::move(project),
-		std::move(const_cast<rls::ast::DefineDecl*>(defineDecl->second)->body)
-	};
-}
-
 // Invoking a Condition parameter threads the bundle receiver: a Condition is a one-arg
 // rule callback `Callable[[bundle], Rule]`, so it must be called as `cond(bundle)`.
 TEST(SohApCallables, InvokeThreadsBundle) {

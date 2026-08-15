@@ -74,7 +74,7 @@ struct TranspilerConfig {
 };
 
 static bool runTranspiler(const TranspilerConfig& config, const rls::ast::Project& project) {
-    if (config.name != "soh" && config.name != "ap") {
+    if (config.name != "soh" && config.name != "soh_ap") {
         std::cerr << "error: unknown transpiler '" << config.name << "'\n";
         return false;
     }

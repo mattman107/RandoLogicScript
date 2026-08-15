@@ -88,3 +88,28 @@ inline rls::ast::Project resolveFromSource(const std::string& source) {
 
 	return project;
 }
+
+// An analyzed project paired with one expression borrowed out of it. The project must
+// outlive the expression, so the two travel together.
+struct ResolvedExpression {
+	rls::ast::Project project;
+	rls::ast::ExprPtr expr;
+};
+
+// Resolve a define from inline RLS source and hand back its body expression.
+inline ResolvedExpression sourceToExpression(const std::string& source, const std::string& defineName) {
+	auto project = resolveFromSource(source);
+	auto defineDecl = project.DefineDecls.find(defineName);
+	if (defineDecl == project.DefineDecls.end()) {
+		return { std::move(project), nullptr };
+	}
+
+	return {
+		std::move(project),
+		std::move(const_cast<rls::ast::DefineDecl*>(defineDecl->second)->body)
+	};
+}
+
+inline std::string GenerateExpression(const ResolvedExpression& resolved) {
+	return rls::transpilers::soh_ap::SohApTranspiler(resolved.project).GenerateExpression(resolved.expr);
+}

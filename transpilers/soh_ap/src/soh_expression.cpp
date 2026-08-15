@@ -52,9 +52,10 @@ constexpr EnumClassMapping kEnumClasses[] = {
 	{"Enemy",    "Enemies"},
 	{"Distance", "EnemyDistance"},
 	{"Trick",    "Tricks"},
-	// Logic flags and water levels are both modelled as events in the reference world.
+	// Logic flags are materialized as the Events class, built from the regions' event
+	// sections. (WaterLevel has no row: it is a normal RLS enum, so writeEnums generates a
+	// WaterLevel class and enumClassName falls back to that name.)
 	{"Logic",      "Events"},
-	{"WaterLevel", "Events"},
 	{"Setting",    "RandomizerSettingKey"},
 	{"Region",     "Regions"},
 	{"Check",      "Locations"},
@@ -164,6 +165,13 @@ std::optional<std::string> SohApTranspiler::enumClassName(std::string_view enumN
 		if (mapping.rlsEnum == enumName) {
 			return std::string(mapping.pyClass);
 		}
+	}
+	// An enum declared in RLS is generated into enums.gen.py under its own name (see
+	// writeEnums), so it is referenced by that name -- no kEnumClasses row needed. Only
+	// extern enums need one, to reach the class the hand-written world keeps them in.
+	if (const auto* info = project.getEnumInfo(enumName);
+		info != nullptr && info->kind == rls::ast::EnumKind::Normal) {
+		return std::string(enumName);
 	}
 	return std::nullopt;
 }

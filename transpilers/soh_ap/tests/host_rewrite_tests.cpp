@@ -6,31 +6,6 @@
 
 using namespace rls::transpilers::soh_ap_tests;
 
-namespace {
-struct ResolvedExpression {
-	rls::ast::Project project;
-	rls::ast::ExprPtr expr;
-};
-} // namespace
-
-static std::string GenerateExpression(const ResolvedExpression& resolved) {
-	return rls::transpilers::soh_ap::SohApTranspiler(resolved.project).GenerateExpression(resolved.expr);
-}
-
-// Resolve a define from inline RLS source and hand back its body expression.
-static ResolvedExpression sourceToExpression(const std::string& source, const std::string& defineName) {
-	auto project = resolveFromSource(source);
-	auto defineDecl = project.DefineDecls.find(defineName);
-	if (defineDecl == project.DefineDecls.end()) {
-		return { std::move(project), nullptr };
-	}
-
-	return {
-		std::move(project),
-		std::move(const_cast<rls::ast::DefineDecl*>(defineDecl->second)->body)
-	};
-}
-
 // `trick(...)` is rewritten to the SoH can_do_trick host call, threading the bundle
 // receiver and prefixing the value with the Tricks enum class.
 TEST(SohApHostRewrites, TrickCallRewritesToCanDoTrick) {
