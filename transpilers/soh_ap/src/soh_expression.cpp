@@ -38,6 +38,29 @@ namespace {
 // `<= wallet_capacity` form needs stage 1 first to strip the cap.
 // ============================================================================
 
+// The Python enum class each RLS enum's values belong to in the oot_soh world, keyed by
+// the RLS enum name (as declared in the stdlib's `extern enum Item { RG_* }` etc.). An
+// enum absent from this table renders its values bare and annotates as unsupported_type:
+// Scene, Dungeon and Area have no dedicated world class, as their values only ever reach
+// Python through rewrites that consume them (kSmallKeyScenes) or region data.
+struct EnumClassMapping {
+	std::string_view rlsEnum;
+	std::string_view pyClass;
+};
+constexpr EnumClassMapping kEnumClasses[] = {
+	{"Item",     "Items"},
+	{"Enemy",    "Enemies"},
+	{"Distance", "EnemyDistance"},
+	{"Trick",    "Tricks"},
+	// Logic flags and water levels are both modelled as events in the reference world.
+	{"Logic",      "Events"},
+	{"WaterLevel", "Events"},
+	{"Setting",    "RandomizerSettingKey"},
+	{"Region",     "Regions"},
+	{"Check",      "Locations"},
+	{"Trial",      "TrialKey"},
+};
+
 // has/flag/trick all rewrite to `<helper>(bundle, <first arg>)`. check_price is
 // not here: it needs bespoke RC_UNKNOWN_CHECK handling and takes no bundle.
 struct HostCallRewrite {
@@ -136,36 +159,28 @@ constexpr std::string_view kHostProvidedDefines[] = {
 
 } // namespace
 
-std::optional<std::string> SohApTranspiler::enumClassName(rls::ast::Type type) const {
-	switch (type) {
-		case rls::ast::Type::Item: return "Items";
-		case rls::ast::Type::Enemy: return "Enemies";
-		case rls::ast::Type::Distance: return "EnemyDistance";
-		case rls::ast::Type::Trick: return "Tricks";
-		// Water-level values live in the Events enum in the reference oot_soh world.
-		case rls::ast::Type::Logic:
-		case rls::ast::Type::WaterLevel: return "Events";
-		case rls::ast::Type::Setting: return "RandomizerSettingKey";
-		case rls::ast::Type::Region: return "Regions";
-		case rls::ast::Type::Check: return "Locations";
-		case rls::ast::Type::Trial: return "TrialKey";
-		default: return std::nullopt;
+std::optional<std::string> SohApTranspiler::enumClassName(std::string_view enumName) const {
+	for (const auto& mapping : kEnumClasses) {
+		if (mapping.rlsEnum == enumName) {
+			return std::string(mapping.pyClass);
+		}
 	}
+	return std::nullopt;
 }
 
-std::string SohApTranspiler::renderEnumValue(rls::ast::Type type, const std::string& name) const {
+std::string SohApTranspiler::renderEnumValue(std::string_view enumName, const std::string& value) const {
 	// Generic on/off setting literals collapse to Python booleans rather than enum members.
-	if (type == rls::ast::Type::Setting) {
-		if (name == "RO_GENERIC_YES") {
+	if (enumName == "Setting") {
+		if (value == "RO_GENERIC_YES") {
 			return "True";
-		} else if (name == "RO_GENERIC_NO") {
+		} else if (value == "RO_GENERIC_NO") {
 			return "False";
 		}
 	}
-	if (auto cls = enumClassName(type)) {
-		return *cls + "." + name;
+	if (auto cls = enumClassName(enumName)) {
+		return *cls + "." + value;
 	}
-	return name;
+	return value;
 }
 
 std::optional<std::string> SohApTranspiler::renderHostCall(const rls::ast::CallExpr& node,

@@ -15,7 +15,8 @@ void ApTranspiler::GenerateFunctionDefinitionsSource(rls::OutputWriter& out) con
 		if (!type.has_value()) {
 			return "missing_type";
 		}
-		return pythonTypeName(type.value());
+		// Which enum an enum-typed node belongs to lives beside the type, so pass it along.
+		return pythonTypeName(type.value(), project.getEnumType(node));
 	};
 
 	for (const auto& [name, decl] : project.DefineDecls) {

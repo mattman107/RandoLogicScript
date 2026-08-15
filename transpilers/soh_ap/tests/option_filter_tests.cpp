@@ -32,6 +32,23 @@ static ResolvedExpression sourceToExpression(const std::string& source, const st
 	};
 }
 
+// Dotted enum access (`Item.RG_HOOKSHOT`) renders exactly like the bare identifier form:
+// both route through renderEnumValue with the same enum name, so choosing the disambiguated
+// spelling in RLS never changes the generated Python.
+TEST(SohApRendering, DottedEnumAccessMatchesBareIdentifier) {
+	const std::string dotted = GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    has(Item.RG_HOOKSHOT)\n",
+		"test"));
+	const std::string bare = GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    has(RG_HOOKSHOT)\n",
+		"test"));
+
+	EXPECT_EQ(dotted, "has_item(bundle, Items.RG_HOOKSHOT)");
+	EXPECT_EQ(dotted, bare);
+}
+
 // A setting value identifier is rendered with the SoH RandomizerSettingKey enum prefix.
 TEST(SohApRendering, SettingValueGetsEnumPrefix) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(

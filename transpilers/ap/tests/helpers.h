@@ -53,7 +53,7 @@ namespace rls::transpilers::ap_tests {
 		std::string exitEntryLine(const std::string&, const std::string&) const override { return ""; }
 		void writeEnums(rls::OutputWriter&) const override {}
 		std::string functionsPreamble() const override { return ""; }
-		std::string pythonTypeName(rls::ast::Type) const override { return ""; }
+		std::string pythonTypeName(rls::ast::Type, std::optional<std::string_view>) const override { return ""; }
 	};
 
 } // namespace rls::transpilers::ap_tests
@@ -70,14 +70,24 @@ inline void printDiagnostic(const rls::ast::Diagnostic& d) {
 	ADD_FAILURE() << msg.str();
 }
 
-// Prepend the host-provided extern defines the access-rule expressions rely on,
-// so test sources only need to contain the expression under test.
+// Prepend the host-provided extern enums and defines the access-rule expressions rely
+// on, so test sources only need to contain the expression under test. The enums must be
+// declared for the parameter type annotations below to resolve.
 inline std::string withHostExterns(const std::string& source) {
 	return
+		"extern enum Item { RG_* }\n"
+		"extern enum Enemy { RE_* }\n"
+		"extern enum Distance { ED_* }\n"
+		"extern enum Trick { RT_* }\n"
+		"extern enum Logic { LOGIC_* }\n"
+		"extern enum Scene { SCENE_* }\n"
+		"extern enum Setting { RSK_*, RO_* }\n"
+		"extern enum Region { RR_* }\n"
+		"extern enum Check { RC_* }\n"
 		"extern define has(item: Item) -> Bool\n"
 		"extern define can_use(item: Item) -> Bool\n"
 		"extern define flag(key: Logic) -> Bool\n"
-		"extern define setting(key: Setting) -> Setting\n"
+		"extern define setting(key: Setting) -> Int\n"
 		"extern define trick(key: Trick) -> Bool\n"
 		"extern define can_kill(e: Enemy) -> Bool\n"
 		+ source;

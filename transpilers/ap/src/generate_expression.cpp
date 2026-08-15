@@ -162,13 +162,32 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::IntLiteral& node) c
 	return std::to_string(node.value);
 }
 
+std::string ApTranspiler::GenerateExpression(const rls::ast::StringLiteral& node) const {
+	return "\"" + node.value + "\"";
+}
+
+std::string ApTranspiler::GenerateExpression(const rls::ast::ListExpr& node) const {
+	// Lists only ever appear in region data (e.g. `areas: [RA_X, RA_Y]`), which this
+	// transpiler reads directly rather than through expression generation -- so a list
+	// reaching here is a list in a rule expression, which RuleBuilder has no form for.
+	// ListExpr carries no span of its own; the first element locates it well enough.
+	Diagnose(node.elements.empty() ? rls::ast::Span{} : node.elements.front()->span,
+		"a list is not representable in an Archipelago rule expression");
+	return "";
+}
+
+std::string ApTranspiler::GenerateExpression(const rls::ast::MemberExpr& node) const {
+	// `EnumName.ValueName`: the enum is named explicitly, so no type lookup is needed.
+	return renderEnumValue(node.object.text, node.member.text);
+}
+
 std::string ApTranspiler::GenerateExpression(const rls::ast::Identifier& node) const {
 	if (node.kind == rls::ast::IdentifierKind::EnumValue) {
-		auto type = project.getType(&node);
-		if (!type.has_value()) {
+		auto enumName = project.getEnumType(&node);
+		if (!enumName.has_value()) {
 			return node.name.text;
 		}
-		return renderEnumValue(type.value(), node.name.text);
+		return renderEnumValue(*enumName, node.name.text);
 	} else if (node.kind == rls::ast::IdentifierKind::Parameter) {
 		return node.name.text;
 	} else if (node.kind == rls::ast::IdentifierKind::FunctionRef) {
@@ -644,8 +663,9 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::InvokeExpr& node) c
 
 std::string ApTranspiler::GenerateExpression(const rls::ast::HereRef& node) const {
 	// `here` lowers to a reference to the enclosing region, resolved by sema. It renders
-	// like any other Region-typed enum value (e.g. SoH's `Regions.<name>`).
-	return renderEnumValue(rls::ast::Type::Region, node.resolvedRegion.text);
+	// like any other value of the host's region enum (e.g. SoH's `Regions.<name>`). The
+	// enum name is fixed here because `here` has no identifier node to look up.
+	return renderEnumValue("Region", node.resolvedRegion.text);
 }
 
 std::string ApTranspiler::GenerateExpression(const rls::ast::MatchExpr& node) const {

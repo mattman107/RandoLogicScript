@@ -35,8 +35,8 @@ std::string ApTranspiler::ruleContextOptions() const {
 	return "";
 }
 
-std::string ApTranspiler::renderEnumValue(rls::ast::Type, const std::string& name) const {
-	return name;
+std::string ApTranspiler::renderEnumValue(std::string_view, const std::string& value) const {
+	return value;
 }
 
 std::optional<std::string> ApTranspiler::renderHostCall(const rls::ast::CallExpr&, size_t,

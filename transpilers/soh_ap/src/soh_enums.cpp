@@ -51,7 +51,7 @@ void SohApTranspiler::writeEnums(rls::OutputWriter& out) const {
 
 	for (const auto& [regionName, region] : project.RegionDecls) {
 		// Do Regions while here
-		regions << "    " << region->key.text << " = \"" << region->body.name << "\"\n";
+		regions << "    " << region->key.text << " = \"" << ap::RegionDisplayName(*region) << "\"\n";
 
 		std::vector<const rls::ast::ExtendRegionDecl*> extendRegionDecls;
 		const auto extendRegionIt = project.ExtendRegionDecls.find(region->key.text);

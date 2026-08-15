@@ -15,7 +15,8 @@ std::string SohApTranspiler::functionsPreamble() const {
 		"    from ... import SohWorld\n";
 }
 
-std::string SohApTranspiler::pythonTypeName(rls::ast::Type type) const {
+std::string SohApTranspiler::pythonTypeName(
+	rls::ast::Type type, std::optional<std::string_view> enumName) const {
 	using AT = rls::ast::Type;
 	switch (type) {
 		case AT::Bool: return "bool";
@@ -26,10 +27,12 @@ std::string SohApTranspiler::pythonTypeName(rls::ast::Type type) const {
 		case AT::Callable: return "Callable[[tuple[Regions, \"SohWorld\"]], Rule]";
 		default: break;
 	}
-	// Every other supported type is enum-valued; annotate it with the same class
-	// renderEnumValue prefixes its values with, so signatures and values agree.
-	if (auto cls = enumClassName(type)) {
-		return *cls;
+	// An enum-valued parameter is annotated with the same class renderEnumValue prefixes
+	// its values with, so signatures and values agree.
+	if (type == AT::Enum && enumName.has_value()) {
+		if (auto cls = enumClassName(*enumName)) {
+			return *cls;
+		}
 	}
 	return "unsupported_type";
 }

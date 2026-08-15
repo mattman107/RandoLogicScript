@@ -64,7 +64,7 @@ void ApTranspiler::GenerateRegionsSource(rls::OutputWriter& out) const {
 				return exitEntryLine(entry.name.text, GenerateExpression(entry.condition));
 			});
 
-		source << "    # " << region->body.name << "\n";
+		source << "    # " << RegionDisplayName(*region) << "\n";
 		source << events << locations << exits << "\n";
 	}
 }

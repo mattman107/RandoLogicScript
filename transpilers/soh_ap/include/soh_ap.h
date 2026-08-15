@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "ast.h"
 #include "output.h"
@@ -25,7 +26,7 @@ public:
 protected:
 	std::string ruleContextParam() const override;
 	std::string ruleContextOptions() const override;
-	std::string renderEnumValue(rls::ast::Type type, const std::string& name) const override;
+	std::string renderEnumValue(std::string_view enumName, const std::string& value) const override;
 	std::optional<std::string> renderHostCall(const rls::ast::CallExpr& node,
 		size_t overrideIdx = std::string::npos, const rls::ast::Expr* overrideExpr = nullptr) const override;
 	std::optional<std::string> renderBinarySpecialCase(const rls::ast::BinaryExpr& node) const override;
@@ -42,16 +43,17 @@ protected:
 	std::string exitEntryLine(const std::string& entryName, const std::string& rule) const override;
 	void writeEnums(rls::OutputWriter& out) const override;
 	std::string functionsPreamble() const override;
-	std::string pythonTypeName(rls::ast::Type type) const override;
+	std::string pythonTypeName(
+		rls::ast::Type type, std::optional<std::string_view> enumName) const override;
 
 private:
-	// The Python enum class that values of an enum-valued RLS type belong to (e.g.
-	// Item -> "Items", Check -> "Locations"). std::nullopt for non-enum types (Bool,
-	// Int, Condition) and for enum types with no dedicated class in the reference world
-	// (Scene/Dungeon/Area, which render bare). This is the single source of truth shared
-	// by renderEnumValue (the value prefix) and pythonTypeName (the parameter annotation),
-	// so the two cannot drift: a value `Items.RG_HOOKSHOT` always annotates as `Items`.
-	std::optional<std::string> enumClassName(rls::ast::Type type) const;
+	// The Python enum class that values of an RLS enum belong to (e.g. Item -> "Items",
+	// Check -> "Locations"), keyed by the RLS enum's name. std::nullopt for enums with no
+	// dedicated class in the reference world (Scene/Dungeon/Area, which render bare). This
+	// is the single source of truth shared by renderEnumValue (the value prefix) and
+	// pythonTypeName (the parameter annotation), so the two cannot drift: a value
+	// `Items.RG_HOOKSHOT` always annotates as `Items`.
+	std::optional<std::string> enumClassName(std::string_view enumName) const;
 };
 
 void Transpile(const rls::ast::Project& project, rls::OutputWriter& out);

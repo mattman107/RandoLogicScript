@@ -4,6 +4,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ast.h"
@@ -70,10 +71,13 @@ protected:
 	// enable it -- e.g. SoH's bundle is `(region, world)`, so it returns "bundle[1].options".
 	virtual std::string ruleContextOptions() const;
 
-	// Render an enum-value identifier (e.g. RG_HOOKSHOT) to its Python form.
+	// Render an enum-value identifier (e.g. RG_HOOKSHOT) to its Python form, given the
+	// name of the enum it belongs to (e.g. "Item") and the value name. Enums are keyed by
+	// name rather than by ast::Type: every enum shares the single Type::Enum, and the
+	// identity lives beside it in project.getEnumType(node).
 	// Default: the bare value name. Override to add world enum-class prefixes
 	// and value overrides (e.g. RO_GENERIC_YES -> "True").
-	virtual std::string renderEnumValue(rls::ast::Type type, const std::string& name) const;
+	virtual std::string renderEnumValue(std::string_view enumName, const std::string& value) const;
 
 	// Rewrite a host/builtin call (has, flag, trick, ...) to Python. Default:
 	// std::nullopt, so the core emits the default call form `callee(args...)`
@@ -115,8 +119,11 @@ protected:
 	virtual void writeEnums(rls::OutputWriter& out) const = 0;
 	// Preamble for the functions file (header comment + imports).
 	virtual std::string functionsPreamble() const = 0;
-	// Python type name for an RLS type, used in generated function signatures.
-	virtual std::string pythonTypeName(rls::ast::Type type) const = 0;
+	// Python type name for an RLS type, used in generated function signatures. For
+	// Type::Enum, `enumName` carries which enum it is (from project.getEnumType); it is
+	// std::nullopt for every other type.
+	virtual std::string pythonTypeName(
+		rls::ast::Type type, std::optional<std::string_view> enumName) const = 0;
 
 	const rls::ast::Project& project;
 	mutable std::optional<std::string> currentLocationName;
@@ -189,7 +196,11 @@ private:
 	std::string GenerateChildExpression(const rls::ast::ExprPtr& expr, int parentPrec, bool isRightChild = false) const;
 	std::string GenerateExpression(const rls::ast::BoolLiteral& node) const;
 	std::string GenerateExpression(const rls::ast::IntLiteral& node) const;
+	std::string GenerateExpression(const rls::ast::StringLiteral& node) const;
+	std::string GenerateExpression(const rls::ast::ListExpr& node) const;
 	std::string GenerateExpression(const rls::ast::Identifier& node) const;
+	// `EnumName.ValueName` -- the dotted form disambiguating a value shared by two enums.
+	std::string GenerateExpression(const rls::ast::MemberExpr& node) const;
 	std::string GenerateExpression(const rls::ast::UnaryExpr& node) const;
 	std::string GenerateExpression(const rls::ast::BinaryExpr& node) const;
 	std::string GenerateExpression(const rls::ast::TernaryExpr& node) const;

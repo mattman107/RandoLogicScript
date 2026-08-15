@@ -26,6 +26,18 @@ inline void WriteEntries(
 	}
 }
 
+// A region's human-readable display name: the `name: "..."` data entry. Region bodies
+// carry arbitrary key/value data, so the key is looked up rather than being a fixed field;
+// a missing or non-string `name` yields "" (sema/the target's Validate() reports it).
+inline std::string RegionDisplayName(const rls::ast::RegionDecl& region) {
+	const auto* entry = region.body.findData("name");
+	if (entry == nullptr) {
+		return "";
+	}
+	const auto* literal = std::get_if<rls::ast::StringLiteral>(&entry->value->node);
+	return literal != nullptr ? literal->value : "";
+}
+
 // Collect the names of every entry in every section of the given kind.
 inline void InsertToSet(
 	const std::vector<rls::ast::Section>& sections,
