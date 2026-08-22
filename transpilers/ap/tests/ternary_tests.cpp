@@ -1,10 +1,11 @@
 // Tests for rule-conditioned ternary lowering. A ternary `C ? a : b` whose condition is a
-// rule (so it cannot be a Python `if` -- bool(rule) raises) and whose branches are rules
-// lowers to `(C & a) | b`: the then-branch stays gated by the condition, the else-branch is
-// unconditional. This needs no rule negation and never synthesizes a complement for the
-// condition. Generic AP behavior, tested against the minimal default-hook transpiler (no
-// receiver, no host rewrites). Build-time-conditioned and value-branch ternaries are covered
-// in diagnostic_tests.cpp.
+// rule (so it cannot be a Python `if` -- bool(rule) raises) lowers to the host conditional
+// rule `rls_conditional(C, a, b)`, which evaluates C at solve time and returns the branch it
+// selects. This needs no rule negation, never synthesizes a complement for the condition, and
+// -- unlike the `(C & a) | b` idiom it replaced -- keeps the else-branch gated. Generic AP
+// behavior, tested against the minimal default-hook transpiler (no receiver, no host
+// rewrites). Build-time-conditioned and value-branch ternaries are covered in
+// diagnostic_tests.cpp.
 #include "helpers.h"
 
 using namespace rls::transpilers::ap_tests;
@@ -32,33 +33,35 @@ static ResolvedExpression sourceToExpression(const std::string& source, const st
 	};
 }
 
-// `C ? a : b` lowers to `(C & a) | b`: the then-branch is gated by the rule condition, the
-// else-branch is unconditional -- no complement of the condition is synthesized.
-TEST(ApTernary, RuleConditionedTernaryGatesThenLeavesElseUnconditional) {
+// `C ? a : b` lowers to `rls_conditional(C, a, b)`: each branch is reachable only under the
+// truth value the source wrote for it, and no complement of the condition is synthesized.
+TEST(ApTernary, RuleConditionedTernaryLowersToConditionalRule) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"define test():\n"
 		"    has(RG_HOOKSHOT) ? has(RG_BOW) : has(RG_SLINGSHOT)\n",
 		"test")),
-		"(has(RG_HOOKSHOT) & has(RG_BOW)) | has(RG_SLINGSHOT)");
+		"rls_conditional(has(RG_HOOKSHOT), has(RG_BOW), has(RG_SLINGSHOT))");
 }
 
-// A loose else branch (an or-rule) is parenthesized as the right operand of `|`.
-TEST(ApTernary, ElseOrBranchIsParenthesized) {
+// A compound else branch is one argument of the conditional rule -- no parentheses needed, and
+// it stays gated on the condition being false rather than becoming unconditional.
+TEST(ApTernary, ElseOrBranchStaysGated) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"define test():\n"
 		"    has(RG_HOOKSHOT) ? has(RG_BOW) : (has(RG_SLINGSHOT) or has(RG_BOOMERANG))\n",
 		"test")),
-		"(has(RG_HOOKSHOT) & has(RG_BOW)) | (has(RG_SLINGSHOT) | has(RG_BOOMERANG))");
+		"rls_conditional(has(RG_HOOKSHOT), has(RG_BOW), has(RG_SLINGSHOT) | has(RG_BOOMERANG))");
 }
 
-// A nested else ternary chains: `C1 ? a : C2 ? b : c` -> `(C1 & a) | ((C2 & b) | c)`.
+// A nested else ternary nests the conditional rules, mirroring the source chain exactly.
 TEST(ApTernary, NestedElseTernaryChains) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"define test():\n"
 		"    has(RG_HOOKSHOT) ? has(RG_BOW) :\n"
 		"    has(RG_SLINGSHOT) ? has(RG_BOOMERANG) : has(RG_HAMMER)\n",
 		"test")),
-		"(has(RG_HOOKSHOT) & has(RG_BOW)) | ((has(RG_SLINGSHOT) & has(RG_BOOMERANG)) | has(RG_HAMMER))");
+		"rls_conditional(has(RG_HOOKSHOT), has(RG_BOW), "
+		"rls_conditional(has(RG_SLINGSHOT), has(RG_BOOMERANG), has(RG_HAMMER)))");
 }
 
 // When a rule-conditioned ternary's branches are VALUES fed into a call, they cannot be

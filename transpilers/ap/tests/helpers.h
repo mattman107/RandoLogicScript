@@ -40,6 +40,11 @@ namespace rls::transpilers::ap_tests {
 
 		void Transpile(rls::OutputWriter&) const override {}
 
+		// Exposed for tests of the whole-file generation paths -- the top-of-rule checks run
+		// there, not inside GenerateExpression.
+		using ApTranspiler::GenerateFunctionDefinitionsSource;
+		using ApTranspiler::GenerateRegionsSource;
+
 	protected:
 		std::string regionsPreamble() const override { return ""; }
 		std::string regionCreationArgs(const std::string&) const override { return ""; }

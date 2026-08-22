@@ -34,6 +34,9 @@ void ApTranspiler::GenerateRegionsSource(rls::OutputWriter& out) const {
 			bool wroteEntry = false;
 			auto writeFrom = [&](const std::vector<rls::ast::Section>& sections) {
 				WriteEntries(sections, kind, [&](const rls::ast::Entry& entry) {
+					// An entry condition is the top of a generated rule, so nothing downstream
+					// checks it: a runtime value standing alone here has to be caught now.
+					DiagnoseTopLevelValue(entry.condition);
 					body << formatEntry(entry);
 					wroteEntry = true;
 				});

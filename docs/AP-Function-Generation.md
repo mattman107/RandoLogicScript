@@ -157,12 +157,19 @@ pinned by `ApNegation.*` and `SohApRendering.NotFireLoopLockedNegatesKeysanityMe
 | Condition | Lowering |
 |-----------|----------|
 | `cond` is **V** | `a if cond else b` (legal; `a`/`b` may be R or V as long as they agree) |
-| `cond` is **R**, rule branches | `(cond & a) \| b` — the then-branch is gated by the condition, the else-branch is unconditional. No rule negation is needed and no complement of `cond` is synthesized (the source never wrote one). More permissive than a strict ternary, but **monotonic**, which is what access logic wants: gaining `cond` never removes the else-branch's access. |
-| `cond` is **R**, a value branch (or **RV** condition) | **unsupported → diagnostic** (a Rule cannot be a Python `if`, and `cond & <value>` is ill-typed) |
+| `cond` is **R**, rule branches | `rls_conditional(cond, a, b)` — a host rule that evaluates `cond` at solve time and returns the branch it selects. Exact: each branch is reachable only under the truth value the source wrote for it, no rule negation is needed, and no complement of `cond` is synthesized. |
+| `cond` is **R**, a value branch, inside a rule-producing call | the call is **distributed** over the branches: `f(.., cond ? A : B, ..)` → `rls_conditional(cond, f(..,A,..), f(..,B,..))`. Same host rule, reached by lifting the call so both children are rules. |
+| `cond` is **R**, a value branch that is *itself* the result (or an **RV** condition) | **unsupported → diagnostic** (a Rule cannot be a Python `if`, and there is no enclosing call to lift) |
 
-The rule-conditioned rule-branch case is selected by `isRuleConditionedRuleTernary`
-(`generate_expression.cpp`), pinned by `ApTernary.*` (generic) and
+The rule-branch case is selected by `isRuleConditionedRuleTernary` and the value-branch case by
+`tryDistributeTernaryArg` (both `generate_expression.cpp`); both render through
+`renderConditionalRule`. Pinned by `ApTernary.*` (generic) and
 `SohApHostRewrites.AgeConditional*` (SoH bundle/enum rendering).
+
+An earlier lowering used the rule idiom `(cond & a) | b` for the rule-branch case. It needed no
+host support, but left the else-branch **unconditional** — `is_child() ? can_climb_ladder() :
+has(RG_CLIMB)` granted a child access via `RG_CLIMB`, which the source never wrote. The
+conditional host rule replaced it once it existed for the value-branch case.
 
 ---
 
@@ -288,6 +295,27 @@ diagnostic at the offending node rather than generate code that throws
 `Diagnostics()` (`ap_transpiler.cpp`) accumulate these; `runTranspiler`
 (`console/main.cpp`) prints them and aborts with a non-zero exit. Pinned by
 `ApDiagnostics.*`.
+
+Two of these checks do not belong to any operator, so they are easy to lose track of:
+
+- **A runtime value at the top of a rule.** `and`/`or` and ternary conditions
+  diagnose their runtime operands as they combine them, but a runtime value
+  standing *alone* — a region entry condition, a generated function body — has no
+  combining operator above it. `DiagnoseTopLevelValue` is called from
+  `GenerateRegionsSource` and `GenerateFunctionDefinitionsSource` for exactly that
+  position; without it `RC_FOO: bottle_count() >= 3` emits
+  `lambda bundle: bottle_count(bundle) >= 3`, evaluated once against the empty
+  initial collection state.
+- **An unlowerable operation on a setting.** An `OptionFilter` tests a setting for
+  equality against a build-time value and nothing else, so `MatchSettingComparison`
+  accepts `==`/`!=` only — in either operand order, against any build-time value
+  (bare or dotted enum value, int literal, parameter). Anything else with a
+  `setting(...)` operand (an ordered comparison, arithmetic, a comparison against
+  another rule) is diagnosed by `GenerateExpression(BinaryExpr)`. Falling through
+  instead would apply the operation to a `Rule` object: `==` compares by identity
+  and is silently always-False, `>=` raises at world-load. `and`/`or` are exempt —
+  a bare `setting(...)` truthiness guard is a proper rule. Pinned by
+  `ApOptionFilters.*`.
 
 ### 6.5 Host-provided defines
 

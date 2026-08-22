@@ -187,9 +187,10 @@ private:
 	enum class AndOrLowering { RuleOp, PythonOp, MixedTernary, Unrepresentable };
 	AndOrLowering ClassifyAndOr(const rls::ast::BinaryExpr& node) const;
 
-	// True if `node` is a rule-conditioned ternary with rule branches, which lowers to the
-	// `(C & a) | b` rule idiom rather than a Python `if`. Shared by GenerateExpression and
-	// GetPythonPrecedence so the emitted form and its precedence stay in sync.
+	// True if `node` is a rule-conditioned ternary with rule branches, which lowers to a
+	// renderConditionalRule(...) host call rather than a Python `if`. Shared by
+	// GenerateExpression and GetPythonPrecedence so the emitted form and its precedence stay
+	// in sync.
 	bool isRuleConditionedRuleTernary(const rls::ast::TernaryExpr& node) const;
 
 	int GetPythonPrecedence(const rls::ast::ExprPtr& expr) const;
@@ -244,17 +245,44 @@ private:
 
 	// Render a conditional (if-then-else) rule `rls_conditional(<ctx>, <cond>, <then>, <else>)`: a
 	// host rule that evaluates <cond> at solve time and picks <then> or <else> accordingly. This
-	// is the faithful lowering of a rule-conditioned ternary -- unlike the `(C & a) | b` idiom it
-	// does not ungate the else-branch, and it needs no rule negation.
+	// is the faithful lowering of every rule-conditioned ternary -- rule branches directly, value
+	// branches after distributing the enclosing call. Unlike the `(C & a) | b` idiom it replaced
+	// it does not ungate the else-branch, and it needs no rule negation.
 	std::string renderConditionalRule(const std::string& cond, const std::string& thenExpr,
 		const std::string& elseExpr) const;
 
 	std::string GenerateExpression(const rls::ast::HereRef& node) const;
 	std::string GenerateExpression(const rls::ast::MatchExpr& node) const;
 
+	// The `setting(KEY) == VALUE` / `!= VALUE` shape: the resolved RSK_* key identifier and the
+	// value it is compared against. Matched in EITHER operand order, and the value may be any
+	// build-time form -- a bare enum value, the dotted `Setting.RO_X` form, an int literal, a
+	// parameter -- so every way the source can spell the comparison reaches the OptionFilter
+	// lowering. std::nullopt when the node is not a setting comparison.
+	struct SettingComparison {
+		const rls::ast::Identifier* key;
+		const rls::ast::Expr* value;
+	};
+	std::optional<SettingComparison> MatchSettingComparison(const rls::ast::BinaryExpr& node) const;
+
 	// True if this binary expression is a `setting(KEY) == VALUE` / `!= VALUE` comparison,
 	// which is emitted as an atomic OptionFilter rule rather than a Python comparison.
 	bool IsSettingComparison(const rls::ast::BinaryExpr& node) const;
+
+	// True if either operand is a direct `setting(...)` call. An OptionFilter tests a setting for
+	// equality only, so any *other* operation over one (an ordered comparison, arithmetic, a
+	// comparison against a non-build-time value) has no lowering: it would emit a raw Python
+	// operation against a Rule object -- silently False for ==/!=, a TypeError for </>. Used by
+	// GenerateExpression(BinaryExpr) to diagnose those instead of emitting them.
+	bool HasSettingOperand(const rls::ast::BinaryExpr& node) const;
+
+	// Diagnose an expression that cannot stand alone at the top of a generated rule. A Runtime
+	// value (bottle_count() >= 1, a state-dependent Int) is neither a Rule nor frozen at build
+	// time, so emitting it yields a lambda returning a plain Python value computed once against
+	// the empty initial collection state -- a silent miscompile. The operator paths (and/or,
+	// ternary conditions) diagnose their own operands; this covers the TOP of each region entry
+	// condition and generated function body, where nothing else looks.
+	void DiagnoseTopLevelValue(const rls::ast::ExprPtr& expr) const;
 
 	// Convert setting(KEY) == VALUE expressions to OptionFilter(...) form for RuleBuilder.
 	// Returns empty string if not a setting comparison; caller uses the fallback.

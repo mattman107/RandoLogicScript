@@ -123,8 +123,8 @@ TEST(SohApHostRewrites, SettingConditionedIntTernaryUsesOptionFilterCheck) {
 		"else 1)");
 }
 
-// The same build-time lowering composes as a plain Python conditional selecting between two rules
-// (exact, unlike the (C & a) | b idiom which would ungate the else-branch).
+// The same build-time lowering composes as a plain Python conditional selecting between two
+// rules -- resolved at generation, so it needs no conditional host rule at all.
 TEST(SohApHostRewrites, SettingConditionedRuleTernaryUsesOptionFilterCheck) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"define test():\n"
@@ -135,10 +135,10 @@ TEST(SohApHostRewrites, SettingConditionedRuleTernaryUsesOptionFilterCheck) {
 		"else has_item(bundle, Items.RG_BOOMERANG)");
 }
 
-// A rule-conditioned ternary whose branches are enum VALUES fed into a call cannot be the
-// (C & a) | b idiom (the branches are not rules). Instead the call is distributed over the
-// ternary into a conditional() rule that picks a branch at solve time -- the faithful mirror of
-// the C++ `CanUse(IsAdult ? RG_HOOKSHOT : RG_LONGSHOT)`.
+// A rule-conditioned ternary whose branches are enum VALUES cannot be handed to the conditional
+// rule directly (its children must be rules). Instead the call is distributed over the ternary,
+// so the conditional picks between two rules at solve time -- the faithful mirror of the C++
+// `CanUse(IsAdult ? RG_HOOKSHOT : RG_LONGSHOT)`.
 TEST(SohApHostRewrites, AgeConditionedItemArgTernaryDistributesToConditional) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"extern define is_adult() -> Bool\n"
@@ -269,31 +269,31 @@ TEST(SohApHostRewrites, CollapsedSpecialCaseNeedsNoParensUnderAnd) {
 		"has_item(bundle, Items.RG_HOOKSHOT) & can_afford_slot(Locations.RC_FOO)");
 }
 
-// A rule-conditioned ternary `is_child() ? a : b` cannot be a Python `if`, so it lowers to
-// the rule idiom `(is_child() & a) | b` -- the then-branch gated by the age rule, the
-// else-branch unconditional. No complement (is_adult) is synthesized: the source never wrote
-// one, and the else-branch items stay age-independent. This verifies the generic lowering
-// (ternary_tests.cpp) threads the bundle receiver and enum prefixes through the SoH hooks.
-TEST(SohApHostRewrites, AgeConditionalTernaryLowersToRuleIdiom) {
+// A rule-conditioned ternary `is_child() ? a : b` cannot be a Python `if`, so both branches go
+// to the host conditional rule, which picks one at solve time. No complement (is_adult) is
+// synthesized and the else-branch stays gated by the condition being false. This verifies the
+// generic lowering (ternary_tests.cpp) threads the bundle receiver and enum prefixes through
+// the SoH hooks.
+TEST(SohApHostRewrites, AgeConditionalTernaryLowersToConditionalRule) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"extern define is_child() -> Bool\n"
 		"define test():\n"
 		"    is_child() ? has(RG_HOOKSHOT) : has(RG_BOOMERANG)\n",
 		"test")),
-		"(is_child(bundle) & has_item(bundle, Items.RG_HOOKSHOT)) | "
-		"has_item(bundle, Items.RG_BOOMERANG)");
+		"rls_conditional(bundle, is_child(bundle), has_item(bundle, Items.RG_HOOKSHOT), "
+		"has_item(bundle, Items.RG_BOOMERANG))");
 }
 
-// A loose else branch (an or-rule) is parenthesized as the right operand of `|`, and is left
-// ungated -- those items are reachable regardless of the condition.
-TEST(SohApHostRewrites, AgeConditionalLeavesElseOrBranchUngated) {
+// A compound else branch is a single argument to the conditional rule, so it needs no
+// parenthesization and stays reachable only when the condition is false.
+TEST(SohApHostRewrites, AgeConditionalKeepsElseOrBranchGated) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
 		"extern define is_child() -> Bool\n"
 		"define test():\n"
 		"    is_child() ? has(RG_HOOKSHOT) : (has(RG_BOOMERANG) or has(RG_FAIRY_BOW))\n",
 		"test")),
-		"(is_child(bundle) & has_item(bundle, Items.RG_HOOKSHOT)) | "
-		"(has_item(bundle, Items.RG_BOOMERANG) | has_item(bundle, Items.RG_FAIRY_BOW))");
+		"rls_conditional(bundle, is_child(bundle), has_item(bundle, Items.RG_HOOKSHOT), "
+		"has_item(bundle, Items.RG_BOOMERANG) | has_item(bundle, Items.RG_FAIRY_BOW))");
 }
 
 // A fallthrough rule match renders the SoH host-call rewrites and enum prefixes inside the

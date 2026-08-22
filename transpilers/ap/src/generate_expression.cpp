@@ -4,30 +4,70 @@
 
 namespace rls::transpilers::ap {
 
+namespace {
+
+// The resolved RSK_* key of a `setting(KEY)` call, or nullptr when `expr` is not one.
+const rls::ast::Identifier* settingKeyOf(const rls::ast::Project& project, const rls::ast::Expr* expr) {
+	auto* call = std::get_if<rls::ast::CallExpr>(&expr->node);
+	if (call == nullptr || call->callee.text != "setting") {
+		return nullptr;
+	}
+	const auto* resolved = project.getResolvedCallArgs(call);
+	if (resolved == nullptr || resolved->empty()) {
+		return nullptr;
+	}
+	return std::get_if<rls::ast::Identifier>(&resolved->front()->node);
+}
+
+} // namespace
+
 std::string ApTranspiler::WrapOptionFilter(const std::string& optionFilterArgs) const {
 	return "True_(options=[OptionFilter(" + optionFilterArgs + ")])";
 }
 
+std::optional<ApTranspiler::SettingComparison> ApTranspiler::MatchSettingComparison(
+	const rls::ast::BinaryExpr& node) const {
+	// An OptionFilter tests equality only, so only == / != can be one.
+	if (node.op != rls::ast::BinaryOp::Eq && node.op != rls::ast::BinaryOp::NotEq) {
+		return std::nullopt;
+	}
+	// Either operand may be the setting() call: `setting(K) is RO_X` and `RO_X is setting(K)`
+	// mean the same thing and must lower the same way.
+	auto tryOrder = [&](const rls::ast::Expr* keySide,
+		const rls::ast::Expr* valueSide) -> std::optional<SettingComparison> {
+		const auto* key = settingKeyOf(project, keySide);
+		// The filter compares the option against a value fixed at generation, so the other side
+		// must be build-time -- a bare or dotted enum value, a literal, a parameter. A rule there
+		// (another setting() call, has(...)) has no OptionFilter form.
+		if (key == nullptr || ClassifyExpression(valueSide) != ValueClass::BuildTime) {
+			return std::nullopt;
+		}
+		return SettingComparison{key, valueSide};
+	};
+	if (auto match = tryOrder(node.left.get(), node.right.get())) {
+		return match;
+	}
+	return tryOrder(node.right.get(), node.left.get());
+}
+
 // True if this binary expression is a `setting(KEY) == VALUE` / `!= VALUE` comparison.
 bool ApTranspiler::IsSettingComparison(const rls::ast::BinaryExpr& node) const {
-	// Only == and != comparisons
-	if (node.op != rls::ast::BinaryOp::Eq && node.op != rls::ast::BinaryOp::NotEq) {
-		return false;
-	}
+	return MatchSettingComparison(node).has_value();
+}
 
-	// Left side must be a setting() call and right must be an identifier (the enum value)
-	auto* leftCall = std::get_if<rls::ast::CallExpr>(&node.left->node);
-	auto* rightId = std::get_if<rls::ast::Identifier>(&node.right->node);
-	if (!leftCall || !rightId || leftCall->callee.text != "setting") {
-		return false;
-	}
+bool ApTranspiler::HasSettingOperand(const rls::ast::BinaryExpr& node) const {
+	return settingKeyOf(project, node.left.get()) != nullptr ||
+		   settingKeyOf(project, node.right.get()) != nullptr;
+}
 
-	// The setting key argument (RSK_*) must resolve to an identifier
-	auto resolvedPtr = project.getResolvedCallArgs(leftCall);
-	if (!resolvedPtr || resolvedPtr->empty()) {
-		return false;
+void ApTranspiler::DiagnoseTopLevelValue(const rls::ast::ExprPtr& expr) const {
+	if (ClassifyExpression(expr) != ValueClass::Runtime) {
+		return;
 	}
-	return std::get_if<rls::ast::Identifier>(&resolvedPtr->front()->node) != nullptr;
+	Diagnose(expr->span,
+		"this rule is a runtime value that is neither a rule nor build-time (e.g. a count "
+		"comparison like bottle_count() >= 1); it would be frozen against the empty initial "
+		"collection state -- lower it to a host rule");
 }
 
 // Try to generate an OptionFilter expression for setting comparisons.
@@ -40,12 +80,12 @@ std::string ApTranspiler::TryGenerateOptionFilter(const rls::ast::BinaryExpr& no
 }
 
 std::string ApTranspiler::optionFilterArgs(const rls::ast::BinaryExpr& node, bool negate) const {
-	auto* rightId = std::get_if<rls::ast::Identifier>(&node.right->node);
-	auto* leftCall = std::get_if<rls::ast::CallExpr>(&node.left->node);
-	auto* settingKeyId = std::get_if<rls::ast::Identifier>(&project.getResolvedCallArgs(leftCall)->front()->node);
+	const SettingComparison comparison = *MatchSettingComparison(node);
 
 	std::ostringstream args;
-	args << settingKeyId->name.text << ", " << GenerateExpression(*rightId);
+	// The compared value sits in a plain Python value position, exactly like a call argument, so
+	// it renders through the same path (a Bool there is `True`/`False`, not `True_()`/`False_()`).
+	args << comparison.key->name.text << ", " << GenerateCallArgument(comparison.value, std::nullopt);
 	// `!=` / `is not` is the "ne" operator; negation flips eq <-> ne.
 	bool ne = (node.op == rls::ast::BinaryOp::NotEq);
 	if (negate) {
@@ -267,9 +307,9 @@ int ApTranspiler::GetPythonPrecedence(const rls::ast::ExprPtr& expr) const {
 		}
 	}
 	if (auto* tern = std::get_if<rls::ast::TernaryExpr>(&expr->node)) {
-		// A rule-conditioned ternary is emitted as an or-expression `(C & a) | b` (precedence
-		// of `|`); a normal Python ternary binds loosest.
-		return isRuleConditionedRuleTernary(*tern) ? 11 : 16;
+		// A rule-conditioned ternary is emitted as an rls_conditional(...) call, which binds as
+		// tightly as any call; a normal Python ternary binds loosest.
+		return isRuleConditionedRuleTernary(*tern) ? 0 : 16;
 	}
 	if (auto* unary = std::get_if<rls::ast::UnaryExpr>(&expr->node);
 		unary && unary->op == rls::ast::UnaryOp::Not) {
@@ -340,6 +380,19 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::BinaryExpr& node) c
 	// Game-specific binary rewrites (e.g. price <= wallet capacity, triforce hunt).
 	if (auto special = renderBinarySpecialCase(node)) {
 		return *special;
+	}
+
+	// A `setting(...)` operand that survived both of the above has no lowering: an OptionFilter
+	// tests a setting for equality against a build-time value and nothing else. Emitting the
+	// operation anyway would apply it to a Rule object -- `==`/`!=` would silently compare by
+	// identity (always False / always True), an ordered comparison or arithmetic would raise at
+	// world-load. `and`/`or` are excluded: a bare setting(...) truthiness guard is a proper rule
+	// and combines normally. Diagnose; the raw form below is a best-effort fallback.
+	if (node.op != rls::ast::BinaryOp::And && node.op != rls::ast::BinaryOp::Or &&
+		HasSettingOperand(node)) {
+		Diagnose(node.left->span,
+			"a setting can only be compared for equality (`is` / `is not`) against a build-time "
+			"value; the Archipelago OptionFilter has no other comparison");
 	}
 
 	switch (node.op) {
@@ -483,27 +536,25 @@ bool ApTranspiler::isRuleConditionedRuleTernary(const rls::ast::TernaryExpr& nod
 
 // Python ternary syntax is "a if test else b"
 std::string ApTranspiler::GenerateExpression(const rls::ast::TernaryExpr& node) const {
-	// A rule-conditioned ternary cannot be a Python `if` (`bool(rule)` raises), and the
-	// RuleBuilder has no rule negation to express the complement of the condition. We lower
-	// `C ? a : b` to `(C & a) | b`: the then-branch stays gated by the condition, while the
-	// else-branch becomes unconditional. This is always representable (no negation needed) and
-	// monotonic -- gaining the condition never *removes* the else-branch's access, which is
-	// what access logic wants. It deliberately does NOT synthesize a complement rule (e.g.
-	// `is_adult()` for `is_child()`): the source never wrote one, and assuming the condition's
-	// negation is some specific other rule would bake in an invariant the game may not hold.
 	// A pure setting condition resolves at build time against world.options, so it can be a
 	// real Python condition via OptionFilter.check(). The ternary then lowers to an ordinary
 	// `a if <check> else b` for ANY branch types -- int (e.g. small_keys count), enum, or rule.
-	// This is exact: unlike the (C & a) | b idiom below it does not ungate the else-branch.
 	if (isBuildTimeSettingCondition(node.condition)) {
 		return GenerateExpression(node.thenBranch) + " if " +
 			   GenerateBuildTimeSettingCondition(node.condition) + " else " +
 			   GenerateExpression(node.elseBranch);
 	}
+	// A rule-conditioned ternary cannot be a Python `if` (`bool(rule)` raises), and the
+	// RuleBuilder has no rule negation to express the complement of the condition. Both branches
+	// are handed to the host conditional rule, which evaluates the condition at solve time and
+	// returns the branch it selects -- an exact mirror of the source ternary, needing no
+	// negation and no synthesized complement for the condition. This is the same lowering the
+	// value-branch case gets by distributing the call (see tryDistributeTernaryArg); the older
+	// `(C & a) | b` idiom is not used because it left the else-branch ungated, granting access
+	// the source never wrote.
 	if (isRuleConditionedRuleTernary(node)) {
-		return "(" + GenerateChildExpression(node.condition, 9) + " & " +
-			   GenerateChildExpression(node.thenBranch, 9, true) + ") | " +
-			   GenerateChildExpression(node.elseBranch, 11, true);
+		return renderConditionalRule(GenerateExpression(node.condition),
+			GenerateExpression(node.thenBranch), GenerateExpression(node.elseBranch));
 	}
 	// Otherwise the condition becomes a Python `if`, so it must be a build-time value. A
 	// runtime non-rule value (or a rule paired with a value branch) cannot be one -- diagnose

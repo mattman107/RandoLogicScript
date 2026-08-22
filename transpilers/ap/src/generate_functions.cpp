@@ -51,6 +51,9 @@ void ApTranspiler::GenerateFunctionDefinitionsSource(rls::OutputWriter& out) con
 		}
 		sig << ") -> " << typeName(decl->body.get());
 
+		// As with a region entry condition, the body is the top of a generated rule -- a runtime
+		// value here is only caught by this check.
+		DiagnoseTopLevelValue(decl->body);
 		source << sig.str() << ":\n";
 		source << "    return " << GenerateExpression(decl->body) << "\n";
 	}
