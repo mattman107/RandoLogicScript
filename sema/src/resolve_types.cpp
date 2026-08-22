@@ -1,4 +1,5 @@
 #include "resolve_types.h"
+#include "diagnostics.h"
 #include "type_helpers.h"
 
 #include <format>
@@ -207,33 +208,19 @@ struct ExprResolver {
 			const auto* def = defIt->second;
 			// TODO: Zero-Argument Constraint — functions with parameters cannot be callable.
 			if (!def->params.empty()) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("function '{}' requires {} argument(s); only zero-argument functions can be used as callable values",
-						node.name.text, def->params.size()),
-					expr.span
-				});
+				diags.push_back(diagnostics::FunctionRequiresZeroArguments(expr.span, node.name.text, def->params.size()));
 				return ast::Type::Error;
 			}
 
 			auto bodyType = project.getType(def->body.get());
 			if (!bodyType.has_value()) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("function '{}' callable reference type is not available yet", node.name.text),
-					expr.span
-				});
+				diags.push_back(diagnostics::FunctionReferenceTypeUnavailable(expr.span, node.name.text));
 				return ast::Type::Error;
 			}
 
 			// TODO: Bool-Return-Type Constraint — only () -> Bool functions become Condition.
 			if (*bodyType != ast::Type::Bool) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("function '{}' cannot be used as a Condition callable because it returns {}",
-						node.name.text, typeName(*bodyType)),
-					expr.span
-				});
+				diags.push_back(diagnostics::FunctionCannotBeCondition(expr.span, node.name.text, typeName(*bodyType)));
 				return ast::Type::Error;
 			}
 
@@ -245,38 +232,49 @@ struct ExprResolver {
 			extIt != project.ExternDefineDecls.end()) {
 			const auto* ext = extIt->second;
 			if (!ext->params.empty()) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("function '{}' requires {} argument(s); only zero-argument functions can be used as callable values",
-						node.name.text, ext->params.size()),
-					expr.span
-				});
+				diags.push_back(diagnostics::FunctionRequiresZeroArguments(expr.span, node.name.text, ext->params.size()));
 				return ast::Type::Error;
 			}
 
 			if (!ext->returnType) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("function '{}' cannot be used as callable value without a return type", node.name.text),
-					expr.span
-				});
+				diags.push_back(diagnostics::FunctionCallableMissingReturnType(expr.span, node.name.text));
 				return ast::Type::Error;
 			}
 
 			auto returnType = resolveTypeAnnotation(project, ext->returnType->name.text);
 			if (!returnType.has_value() || returnType->type != ast::Type::Bool) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("function '{}' cannot be used as a Condition callable because it returns {}",
-						node.name.text,
-						returnType.has_value() ? typeName(returnType->type) : std::string_view{"<unknown>"}),
-					expr.span
-				});
+				diags.push_back(diagnostics::FunctionCannotBeCondition(expr.span, node.name.text,
+					returnType.has_value() ? typeName(returnType->type) : std::string_view{"<unknown>"}));
 				return ast::Type::Error;
 			}
 
 			node.kind = ast::IdentifierKind::FunctionRef;
 			return ast::Type::Condition;
+		}
+
+		std::vector<std::pair<std::string_view, T>> declaredTypes;
+		if (project.RegionDecls.contains(node.name.text)) {
+			declaredTypes.emplace_back("Region", T::Region);
+		}
+		if (project.EventDecls.contains(node.name.text)) {
+			declaredTypes.emplace_back("Event", T::Event);
+		}
+		if (project.LocationDecls.contains(node.name.text)) {
+			declaredTypes.emplace_back("Location", T::Location);
+		}
+		if (declaredTypes.size() > 1) {
+			std::string categories(declaredTypes.front().first);
+			for (size_t index = 1; index < declaredTypes.size(); ++index) {
+				categories += ", ";
+				categories += declaredTypes[index].first;
+			}
+			diags.push_back(diagnostics::AmbiguousIdentifier(
+				expr.span, node.name.text, categories));
+			return T::Error;
+		}
+		if (declaredTypes.size() == 1) {
+			node.kind = ast::IdentifierKind::DeclaredValue;
+			return declaredTypes.front().second;
 		}
 
 		// Resolve identifiers exclusively through declared enum metadata.
@@ -289,12 +287,7 @@ struct ExprResolver {
 				if (i > 0) enumList += ", ";
 				enumList += lookup.ambiguousEnums[i];
 			}
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("ambiguous identifier '{}' found in multiple enums ({}); use EnumName.{} to disambiguate",
-					node.name.text, enumList, node.name.text),
-				expr.span
-			});
+			diags.push_back(diagnostics::AmbiguousIdentifier(expr.span, node.name.text, enumList));
 			return ast::Type::Error;
 		}
 
@@ -305,11 +298,7 @@ struct ExprResolver {
 			return *lookup.type;
 		}
 
-		diags.push_back({
-			ast::DiagnosticLevel::Error,
-			std::format("unknown identifier '{}'", node.name.text),
-			expr.span
-		});
+		diags.push_back(diagnostics::UnknownIdentifier(expr.span, node.name.text));
 		return ast::Type::Error;
 	}
 
@@ -317,12 +306,7 @@ struct ExprResolver {
 		inferUntypedParamIdentifier(*node.operand, ast::Type::Bool);
 		auto opType = resolveExpr(*node.operand);
 		if (opType != ast::Type::Error && !isBoolCompatible(opType)) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("'not' requires a Bool operand, got {}",
-					typeName(opType)),
-				expr.span
-			});
+			diags.push_back(diagnostics::UnaryRequiresBool(expr.span, typeName(opType)));
 		}
 		return ast::Type::Bool;
 	}
@@ -374,20 +358,10 @@ struct ExprResolver {
 		case ast::BinaryOp::Or: {
 			auto opName = node.op == ast::BinaryOp::And ? "and" : "or";
 			if (leftType != T::Error && !isBoolCompatible(leftType)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("'{}' requires Bool operands, left is {}",
-						opName, typeName(leftType)),
-					node.left->span
-				});
+				diags.push_back(diagnostics::LogicalRequiresBool(node.left->span, opName, "left", typeName(leftType)));
 			}
 			if (rightType != T::Error && !isBoolCompatible(rightType)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("'{}' requires Bool operands, right is {}",
-						opName, typeName(rightType)),
-					node.right->span
-				});
+				diags.push_back(diagnostics::LogicalRequiresBool(node.right->span, opName, "right", typeName(rightType)));
 			}
 			return T::Bool;
 		}
@@ -395,30 +369,25 @@ struct ExprResolver {
 		// Equality: both sides must be the same type.
 		case ast::BinaryOp::Eq:
 		case ast::BinaryOp::NotEq:
+		{
+			const auto leftEnum = leftType == T::Enum
+				? project.getEnumType(node.left.get()) : std::optional<std::string_view>{};
+			const auto rightEnum = rightType == T::Enum
+				? project.getEnumType(node.right.get()) : std::optional<std::string_view>{};
 			if (leftType != T::Error && rightType != T::Error
 				&& leftType != rightType
 				&& !(leftType == T::Int && isEnumLikeType(rightType))
-				&& !(rightType == T::Int && isEnumLikeType(leftType))) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("comparison between incompatible types {} and {}",
-						typeName(leftType), typeName(rightType)),
-					expr.span
-				});
+				&& !(rightType == T::Int && isEnumLikeType(leftType))
+				&& !areDomainAndEnumCompatible(leftType, leftEnum, rightType, rightEnum)) {
+				diags.push_back(diagnostics::IncompatibleComparison(expr.span, typeName(leftType), typeName(rightType)));
 			}
 			if (leftType == T::Enum && rightType == T::Enum) {
-				auto leftEnum = project.getEnumType(node.left.get());
-				auto rightEnum = project.getEnumType(node.right.get());
 				if (leftEnum.has_value() && rightEnum.has_value() && *leftEnum != *rightEnum) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("comparison between enum '{}' and enum '{}'",
-							*leftEnum, *rightEnum),
-						expr.span
-					});
+					diags.push_back(diagnostics::EnumComparisonMismatch(expr.span, *leftEnum, *rightEnum));
 				}
 			}
 			return T::Bool;
+		}
 
 		// Ordering: both sides must be Int.
 		case ast::BinaryOp::Lt:
@@ -426,20 +395,10 @@ struct ExprResolver {
 		case ast::BinaryOp::Gt:
 		case ast::BinaryOp::GtEq:
 			if (leftType != T::Error && !isIntCompatibleType(leftType)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("comparison requires Int operands, left is {}",
-						typeName(leftType)),
-					node.left->span
-				});
+				diags.push_back(diagnostics::ComparisonRequiresInt(node.left->span, "left", typeName(leftType)));
 			}
 			if (rightType != T::Error && !isIntCompatibleType(rightType)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("comparison requires Int operands, right is {}",
-						typeName(rightType)),
-					node.right->span
-				});
+				diags.push_back(diagnostics::ComparisonRequiresInt(node.right->span, "right", typeName(rightType)));
 			}
 			return T::Bool;
 
@@ -449,20 +408,10 @@ struct ExprResolver {
 		case ast::BinaryOp::Mul:
 		case ast::BinaryOp::Div:
 			if (leftType != T::Error && !isIntCompatibleType(leftType)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("arithmetic requires Int operands, left is {}",
-						typeName(leftType)),
-					node.left->span
-				});
+				diags.push_back(diagnostics::ArithmeticRequiresInt(node.left->span, "left", typeName(leftType)));
 			}
 			if (rightType != T::Error && !isIntCompatibleType(rightType)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("arithmetic requires Int operands, right is {}",
-						typeName(rightType)),
-					node.right->span
-				});
+				diags.push_back(diagnostics::ArithmeticRequiresInt(node.right->span, "right", typeName(rightType)));
 			}
 			return T::Int;
 		}
@@ -478,12 +427,7 @@ struct ExprResolver {
 		auto elseType = resolveExpr(*node.elseBranch);
 
 		if (condType != T::Error && !isBoolCompatible(condType)) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("ternary condition must be Bool, got {}",
-					typeName(condType)),
-				node.condition->span
-			});
+			diags.push_back(diagnostics::TernaryConditionType(node.condition->span, typeName(condType)));
 		}
 
 		// Determine result type from branches.
@@ -495,12 +439,7 @@ struct ExprResolver {
 				auto thenEnum = project.getEnumType(node.thenBranch.get());
 				auto elseEnum = project.getEnumType(node.elseBranch.get());
 				if (thenEnum.has_value() && elseEnum.has_value() && *thenEnum != *elseEnum) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("ternary branches have different enum types: '{}' and '{}'",
-							*thenEnum, *elseEnum),
-						expr.span
-					});
+					diags.push_back(diagnostics::TernaryEnumMismatch(expr.span, *thenEnum, *elseEnum));
 					return T::Error;
 				}
 				if (thenEnum.has_value()) {
@@ -512,21 +451,11 @@ struct ExprResolver {
 
 		// Both bool-compatible but different (e.g. Int + Bool) → unify to Bool.
 		if (isBoolCompatible(thenType) && isBoolCompatible(elseType)) {
-			diags.push_back({
-				ast::DiagnosticLevel::Warning,
-				std::format("ternary branches have types {} and {}, implicitly converted to Bool",
-					typeName(thenType), typeName(elseType)),
-				expr.span
-			});
+			diags.push_back(diagnostics::TernaryImplicitBool(expr.span, typeName(thenType), typeName(elseType)));
 			return T::Bool;
 		}
 
-		diags.push_back({
-			ast::DiagnosticLevel::Error,
-			std::format("ternary branches have different types: {} and {}",
-				typeName(thenType), typeName(elseType)),
-			expr.span
-		});
+		diags.push_back(diagnostics::TernaryBranchMismatch(expr.span, typeName(thenType), typeName(elseType)));
 		return T::Error;
 	}
 
@@ -572,24 +501,14 @@ struct ExprResolver {
 				auto it = paramIndexByName.find(arg.name->text);
 				if (it == paramIndexByName.end()) {
 					result.hasError = true;
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("'{}' unknown named argument '{}'",
-							function, arg.name->text),
-						arg.value->span
-					});
+					diags.push_back(diagnostics::UnknownNamedArgument(arg.value->span, function, arg.name->text));
 					continue;
 				}
 
 				size_t paramIndex = it->second;
 				if (result.paramBound[paramIndex]) {
 					result.hasError = true;
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("'{}' duplicate argument for parameter '{}'",
-							function, arg.name->text),
-						arg.value->span
-					});
+					diags.push_back(diagnostics::DuplicateArgument(arg.value->span, function, arg.name->text));
 					continue;
 				}
 
@@ -625,12 +544,7 @@ struct ExprResolver {
 			auto count = required == nParams
 				? std::format("{}", required)
 				: std::format("{}-{}", required, nParams);
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("'{}' expects {} argument(s), got {}",
-					function, count, nArgs),
-				expr.span
-			});
+			diags.push_back(diagnostics::ArgumentCountMismatch(expr.span, function, count, nArgs));
 			result.hasError = true;
 		}
 
@@ -638,12 +552,7 @@ struct ExprResolver {
 			auto count = required == nParams
 				? std::format("{}", required)
 				: std::format("{}-{}", required, nParams);
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("'{}' expects {} argument(s), got {}",
-					function, count, nArgs),
-				expr.span
-			});
+			diags.push_back(diagnostics::ArgumentCountMismatch(expr.span, function, count, nArgs));
 			result.hasError = true;
 		}
 
@@ -661,12 +570,7 @@ struct ExprResolver {
 					missing += ", ";
 					missing += missingRequired[i];
 				}
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("'{}' missing required argument(s): {}",
-						function, missing),
-					expr.span
-				});
+				diags.push_back(diagnostics::MissingRequiredArguments(expr.span, function, missing));
 				result.hasError = true;
 			}
 		}
@@ -718,6 +622,13 @@ struct ExprResolver {
 			}
 
 			if (argTypes[argIndex] == T::Error) continue;
+			auto actualEnum = argTypes[argIndex] == T::Enum
+				? project.getEnumType(node.args[argIndex].value.get())
+				: std::optional<std::string_view>{};
+			if (areDomainAndEnumCompatible(
+					*paramType, expectedEnum, argTypes[argIndex], actualEnum)) {
+				continue;
+			}
 
 			// For Enum-typed parameters with known identity, require the same enum.
 			if (*paramType == T::Enum) {
@@ -736,12 +647,8 @@ struct ExprResolver {
 								enumList += ", ";
 								enumList += candidateEnums[i];
 							}
-							diags.push_back({
-								ast::DiagnosticLevel::Error,
-								std::format("'{}' argument {} uses ambiguous integer value {}; matching enums: {}; provide explicit enum context or EnumName.ValueName",
-									function, argIndex + 1, intLiteral->value, enumList),
-								node.args[argIndex].value->span
-							});
+							diags.push_back(diagnostics::AmbiguousEnumInteger(
+									node.args[argIndex].value->span, function, argIndex + 1, intLiteral->value, enumList));
 							continue;
 						}
 					}
@@ -751,17 +658,10 @@ struct ExprResolver {
 				}
 
 				if (expectedEnum.has_value() && argTypes[argIndex] == T::Enum) {
-					auto actualEnum = project.getEnumType(node.args[argIndex].value.get());
 					if (!actualEnum.has_value() || *actualEnum != *expectedEnum) {
-						diags.push_back({
-							ast::DiagnosticLevel::Error,
-							std::format("'{}' argument {} expected enum '{}', got enum '{}'",
-								function,
-								argIndex + 1,
-								*expectedEnum,
-								actualEnum.has_value() ? *actualEnum : std::string_view{"<unknown>"}),
-							node.args[argIndex].value->span
-						});
+						diags.push_back(diagnostics::EnumArgumentMismatch(
+							node.args[argIndex].value->span, function, argIndex + 1, *expectedEnum,
+							actualEnum.has_value() ? *actualEnum : std::string_view{"<unknown>"}));
 						continue;
 					}
 				}
@@ -772,12 +672,8 @@ struct ExprResolver {
 				? std::format("enum '{}'", *expectedEnum)
 				: std::string(typeName(*paramType));
 
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("'{}' argument {} expected {}, got {}",
-					function, argIndex + 1, expectedName, typeName(argTypes[argIndex])),
-				node.args[argIndex].value->span
-			});
+			diags.push_back(diagnostics::ArgumentTypeMismatch(
+				node.args[argIndex].value->span, function, argIndex + 1, expectedName, typeName(argTypes[argIndex])));
 		}
 	}
 
@@ -841,22 +737,12 @@ struct ExprResolver {
 
 			auto calleeType = *scopeIt->second;
 			if (!isCallableType(calleeType)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("'{}' is not callable (type {})",
-						node.callee.text, typeName(calleeType)),
-					expr.span
-				});
+				diags.push_back(diagnostics::ValueNotCallable(expr.span, node.callee.text, typeName(calleeType)));
 				return T::Error;
 			}
 
 			if (!node.args.empty()) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("'{}' expects 0 argument(s), got {}",
-						node.callee.text, node.args.size()),
-					expr.span
-				});
+				diags.push_back(diagnostics::ZeroArgumentCallMismatch(expr.span, node.callee.text, node.args.size()));
 				return T::Error;
 			}
 
@@ -952,11 +838,7 @@ struct ExprResolver {
 		}
 
 		// Unknown function.
-		diags.push_back({
-			ast::DiagnosticLevel::Error,
-			std::format("unknown function '{}'", node.callee.text),
-			expr.span
-		});
+		diags.push_back(diagnostics::UnknownFunction(expr.span, node.callee.text));
 		return T::Error;
 	}
 
@@ -967,11 +849,7 @@ struct ExprResolver {
 		}
 
 		if (calleeType != T::Callable && calleeType != T::Condition) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("expression is not callable (type {})", typeName(calleeType)),
-				expr.span
-			});
+			diags.push_back(diagnostics::ExpressionNotCallable(expr.span, typeName(calleeType)));
 			return T::Error;
 		}
 
@@ -986,11 +864,7 @@ struct ExprResolver {
 	ast::Type resolve(const ast::MemberExpr& node, const ast::Expr& expr) {
 		if (const auto* enumInfo = project.getEnumInfo(node.object.text); enumInfo != nullptr) {
 			if (!enumContainsValueName(*enumInfo, node.member.text)) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("'{}' is not a member of enum '{}'", node.member.text, node.object.text),
-					expr.span
-				});
+				diags.push_back(diagnostics::UnknownEnumMember(expr.span, node.member.text, node.object.text));
 				return T::Error;
 			}
 
@@ -998,26 +872,17 @@ struct ExprResolver {
 			return T::Enum;
 		}
 
-		diags.push_back({
-			ast::DiagnosticLevel::Error,
-			std::format("unknown enum '{}' in member access", node.object.text),
-			expr.span
-		});
+		diags.push_back(diagnostics::UnknownEnum(expr.span, node.object.text));
 		return T::Error;
 	}
 
 	ast::Type resolve(ast::HereRef& node, ast::Expr& expr) {
 		if (!currentRegion.has_value()) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				"'here' can only be used inside a region entry condition; it resolves to enum 'Region'",
-				expr.span
-			});
+			diags.push_back(diagnostics::HereOutsideRegion(expr.span));
 			return T::Error;
 		}
 		node.resolvedRegion = *currentRegion;
-		project.setEnumType(&expr, "Region");
-		return T::Enum;
+		return T::Region;
 	}
 
 	ast::Type resolve(const ast::MatchExpr& node, const ast::Expr& expr) {
@@ -1067,19 +932,11 @@ struct ExprResolver {
 
 			if (arm.isDefault) {
 				if (!arm.patterns.empty()) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						"match wildcard '_' must be a standalone pattern",
-						expr.span
-					});
+					diags.push_back(diagnostics::MatchWildcardNotStandalone(expr.span));
 				}
 
 				if (armIndex + 1 != node.arms.size()) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						"match wildcard '_' arm must be last",
-						expr.span
-					});
+					diags.push_back(diagnostics::MatchWildcardNotLast(expr.span));
 				}
 
 				continue;
@@ -1100,28 +957,15 @@ struct ExprResolver {
 					}
 				} else if (currentPatternType != *patternType) {
 					auto patternName = patternDisplayName(*pattern);
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format(
-							"match pattern '{}' is {} but expected {}",
-							patternName, typeName(currentPatternType),
-							typeName(*patternType)),
-						expr.span
-					});
+					diags.push_back(diagnostics::MatchPatternTypeMismatch(
+						expr.span, patternName, typeName(currentPatternType), typeName(*patternType)));
 				} else if (currentPatternType == T::Enum
 					&& patternEnumIdentity.has_value()
 					&& currentPatternEnumIdentity.has_value()
 					&& *currentPatternEnumIdentity != *patternEnumIdentity) {
 					auto patternName = patternDisplayName(*pattern);
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format(
-							"match pattern '{}' is enum '{}' but expected enum '{}'",
-							patternName,
-							*currentPatternEnumIdentity,
-							*patternEnumIdentity),
-						expr.span
-					});
+					diags.push_back(diagnostics::MatchPatternEnumMismatch(
+						expr.span, patternName, *currentPatternEnumIdentity, *patternEnumIdentity));
 				}
 			}
 		}
@@ -1146,28 +990,14 @@ struct ExprResolver {
 				}
 			} else if (discrimType != *patternType) {
 				auto name = discrimName.value_or("<expr>");
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format(
-						"match discriminant '{}' is {} but patterns are {}",
-						name,
-						typeName(discrimType),
-						typeName(*patternType)),
-					expr.span
-				});
+				diags.push_back(diagnostics::MatchDiscriminantTypeMismatch(
+					expr.span, name, typeName(discrimType), typeName(*patternType)));
 			} else if (discrimType == T::Enum && patternEnumIdentity.has_value()) {
 				auto discrimEnumIdentity = enumIdentityOfExpr(*node.discriminant);
 				if (discrimEnumIdentity.has_value() && *discrimEnumIdentity != *patternEnumIdentity) {
 					auto name = discrimName.value_or("<expr>");
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format(
-							"match discriminant '{}' is enum '{}' but patterns are enum '{}'",
-							name,
-							*discrimEnumIdentity,
-							*patternEnumIdentity),
-						expr.span
-					});
+					diags.push_back(diagnostics::MatchDiscriminantEnumMismatch(
+						expr.span, name, *discrimEnumIdentity, *patternEnumIdentity));
 				}
 			}
 		}
@@ -1182,24 +1012,12 @@ struct ExprResolver {
 				bodyType = armType;
 			} else if (armType != bodyType) {
 				if (isBoolCompatible(armType) && isBoolCompatible(bodyType)) {
-					diags.push_back({
-						ast::DiagnosticLevel::Warning,
-						std::format(
-							"match arm type {} implicitly "
-							"converted to Bool (previous arms are {})",
-							typeName(armType), typeName(bodyType)),
-						arm.body->span
-					});
+					diags.push_back(diagnostics::MatchArmImplicitBool(
+						arm.body->span, typeName(armType), typeName(bodyType)));
 					bodyType = T::Bool;
 				} else {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format(
-							"match arm type {} doesn't match "
-							"previous arms ({})",
-							typeName(armType), typeName(bodyType)),
-						arm.body->span
-					});
+					diags.push_back(diagnostics::MatchArmTypeMismatch(
+						arm.body->span, typeName(armType), typeName(bodyType)));
 				}
 			}
 		}
@@ -1334,11 +1152,7 @@ static std::vector<std::string> topoSortDefines(
 		}
 		names += " -> ";
 		names += cycle.front();
-		diags.push_back({
-			ast::DiagnosticLevel::Error,
-			std::format("cycle in define call graph: {}", names),
-			{}
-		});
+		diags.push_back(diagnostics::DefineCycle({}, names));
 	}
 
 	return order;
@@ -1366,14 +1180,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 						enumScope[param.name.text] = std::string(*annotation->enumName);
 					}
 				} else {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format(
-							"unknown type annotation '{}' "
-							"for parameter '{}'",
-							param.type->name.text, param.name.text),
-						decl->span
-					});
+					diags.push_back(diagnostics::UnknownParameterTypeAnnotation(
+						decl->span, param.type->name.text, param.name.text));
 				}
 			}
 
@@ -1458,14 +1266,8 @@ std::vector<ast::Diagnostic> resolveTypes(ast::Project& project) {
 						project.setEnumType(&param, std::string(*annotation->enumName));
 					}
 				} else {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format(
-							"unknown type annotation '{}' "
-							"for parameter '{}'",
-							param.type->name.text, param.name.text),
-						decl->span
-					});
+					diags.push_back(diagnostics::UnknownParameterTypeAnnotation(
+						decl->span, param.type->name.text, param.name.text));
 				}
 			}
 

@@ -1,0 +1,195 @@
+{
+  "name": "rando-logic-script",
+  "displayName": "Rando Logic Script",
+  "description": "Language support for Rando Logic Script, including syntax highlighting and live compiler diagnostics.",
+  "version": "0.1.0",
+  "publisher": "xxAtrain223",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xxAtrain223/RandoLogicScript"
+  },
+  "homepage": "https://github.com/xxAtrain223/RandoLogicScript#readme",
+  "bugs": {
+    "url": "https://github.com/xxAtrain223/RandoLogicScript/issues"
+  },
+  "pricing": "Free",
+  "keywords": [
+    "rando logic script",
+    "rls",
+    "randomizer",
+    "language server",
+    "domain specific language"
+  ],
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "RLS projects and the native language server require a local or remote file system."
+    }
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "galleryBanner": {
+    "color": "#1f2933",
+    "theme": "dark"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "rls",
+        "aliases": [
+          "Rando Logic Script",
+          "RLS"
+        ],
+        "extensions": [
+          ".rls"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rls",
+        "scopeName": "source.rls",
+        "path": "./syntaxes/rls.tmLanguage.json"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "rls",
+        "scopes": {
+          "function": [
+            "entity.name.function.rls"
+          ],
+          "function.defaultLibrary": [
+            "entity.name.function.rls"
+          ],
+          "parameter": [
+            "variable.parameter.rls"
+          ],
+          "parameter.defaultLibrary": [
+            "variable.parameter.rls"
+          ],
+          "enum": [
+            "entity.name.type.enum.rls"
+          ],
+          "enum.defaultLibrary": [
+            "entity.name.type.enum.rls"
+          ],
+          "enumMember": [
+            "variable.other.enummember.rls"
+          ],
+          "enumMember.readonly.declaration": [
+            "variable.other.enummember.rls"
+          ],
+          "enumMember.readonly.declaration.defaultLibrary": [
+            "variable.other.enummember.rls"
+          ],
+          "enumMember.readonly.defaultLibrary": [
+            "variable.other.enummember.rls"
+          ],
+          "property": [
+            "variable.parameter.rls"
+          ],
+          "property.declaration": [
+            "variable.parameter.rls"
+          ],
+          "operator": [
+            "keyword.operator.word.rls"
+          ],
+          "variable.readonly": [
+            "variable.other.constant.rls"
+          ],
+          "variable.readonly.declaration": [
+            "variable.other.constant.rls"
+          ],
+          "variable.readonly.definition": [
+            "variable.other.constant.rls"
+          ]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "randoLogicScript.restartServer",
+        "title": "Restart Language Server",
+        "category": "Rando Logic Script"
+      }
+    ],
+    "configuration": {
+      "title": "Rando Logic Script",
+      "properties": {
+        "randoLogicScript.server.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to the RLS language server executable. Leave empty to use a bundled server or discover a repository build."
+        },
+        "randoLogicScript.server.arguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine-overridable",
+          "description": "Additional arguments passed to the RLS language server."
+        },
+        "randoLogicScript.completion.sectionSnippetIndentation": {
+          "type": "string",
+          "enum": [
+            "client",
+            "server"
+          ],
+          "enumDescriptions": [
+            "Send relative indentation and let the editor adjust multiline completion snippets. Recommended for VS Code.",
+            "Embed the current line indentation for editors that insert multiline snippet text as-is."
+          ],
+          "default": "client",
+          "scope": "window",
+          "description": "Controls whether the editor or language server supplies indentation for multiline section completion snippets. Restart the language server after changing this setting."
+        },
+        "randoLogicScript.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "scope": "window",
+          "description": "Trace communication between VS Code and the RLS language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run bundle:lsp && npm run compile",
+    "bundle:lsp": "node ./scripts/bundle-language-server.mjs",
+    "bundle": "esbuild ./src/extension.ts --bundle --minify --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "package": "vsce package",
+    "validate:vsix": "node ./scripts/validate-vsix.mjs",
+    "compile": "tsc -p ./ && npm run bundle",
+    "watch": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --watch",
+    "test": "npm run compile && node ./out/test/runTest.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.30",
+    "@types/vscode": "1.82.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.6.2",
+    "esbuild": "^0.28.2",
+    "jszip": "^3.10.1",
+    "typescript": "^5.8.2"
+  }
+}

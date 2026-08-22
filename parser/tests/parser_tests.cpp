@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
+#include <fstream>
 #include <stdexcept>
 
 #include "ast.h"
+#include "editor_syntax.h"
 #include "parser.h"
 
 using namespace rls::ast;
@@ -30,6 +32,14 @@ static const Expr& parseExpr(const std::string& exprSrc) {
 	return *def.body;
 }
 
+static void expectSameSpan(const Span& strict, const Span& editor) {
+	EXPECT_EQ(strict.file, editor.file);
+	EXPECT_EQ(strict.start.line, editor.start.line);
+	EXPECT_EQ(strict.start.column, editor.start.column);
+	EXPECT_EQ(strict.end.line, editor.end.line);
+	EXPECT_EQ(strict.end.column, editor.end.column);
+}
+
 // == Basic parsing ============================================================
 
 TEST(ParserTests, ReturnsEmptyFileForEmptySource) {
@@ -48,6 +58,14 @@ TEST(ParserTests, InvalidSourceReportsDiagnostic) {
 	EXPECT_EQ(file.diagnostics[0].message, "expected declaration or end of file");
 	EXPECT_EQ(file.diagnostics[0].span.start.line, 1u);
 	EXPECT_EQ(file.diagnostics[0].span.start.column, 1u);
+}
+
+TEST(ParserTests, StrictModeDoesNotSkipTopLevelStrings) {
+	const auto file = rls::parser::ParseString("\"enum Fake { VALUE }\"");
+
+	EXPECT_TRUE(file.declarations.empty());
+	ASSERT_FALSE(file.diagnostics.empty());
+	EXPECT_EQ(file.diagnostics[0].message, "expected declaration or end of file");
 }
 
 TEST(ParserTests, MissingIdentifierAfterDefine) {
@@ -145,6 +163,249 @@ TEST(ParserTests, ValidSourceReturnsFile) {
 	const auto* scene = region->body.findData("scene");
 	ASSERT_NE(scene, nullptr);
 	EXPECT_EQ(std::get<rls::ast::Identifier>(scene->value->node).name, "SCENE_TEST");
+}
+
+TEST(ParserTests, EditorModeMatchesStrictModeForValidSource) {
+	const std::string source =
+		"define check(target: Item): can_kill(quantity: target, 2)\n"
+		"region RR_TEST { events { EVENT_TEST: true } }\n"
+		"enum Color { RED, BLUE }";
+	const auto strict = rls::parser::ParseStringWithIndex(
+		source, "parity.rls", rls::parser::ParseMode::Strict);
+	const auto editor = rls::parser::ParseStringWithIndex(
+		source, "parity.rls", rls::parser::ParseMode::Editor);
+
+	EXPECT_TRUE(strict.file.diagnostics.empty());
+	EXPECT_TRUE(editor.file.diagnostics.empty());
+	ASSERT_EQ(strict.file.declarations.size(), editor.file.declarations.size());
+	ASSERT_EQ(strict.file.declarations.size(), 3u);
+
+	const auto& strictDefine = std::get<DefineDecl>(strict.file.declarations[0]);
+	const auto& editorDefine = std::get<DefineDecl>(editor.file.declarations[0]);
+	EXPECT_EQ(strictDefine.name.text, editorDefine.name.text);
+	expectSameSpan(strictDefine.name.span, editorDefine.name.span);
+	ASSERT_EQ(strictDefine.params.size(), editorDefine.params.size());
+	EXPECT_EQ(strictDefine.params[0].name.text, editorDefine.params[0].name.text);
+	expectSameSpan(strictDefine.params[0].name.span, editorDefine.params[0].name.span);
+
+	const auto& strictRegion = std::get<RegionDecl>(strict.file.declarations[1]);
+	const auto& editorRegion = std::get<RegionDecl>(editor.file.declarations[1]);
+	EXPECT_EQ(strictRegion.key.text, editorRegion.key.text);
+	expectSameSpan(strictRegion.key.span, editorRegion.key.span);
+
+	ASSERT_EQ(strict.sourceIndex.declarations().size(), editor.sourceIndex.declarations().size());
+	for (size_t index = 0; index < strict.sourceIndex.declarations().size(); ++index) {
+		EXPECT_EQ(strict.sourceIndex.declarations()[index].kind,
+			editor.sourceIndex.declarations()[index].kind);
+		expectSameSpan(strict.sourceIndex.declarations()[index].span,
+			editor.sourceIndex.declarations()[index].span);
+	}
+
+	const auto strictName = strict.sourceIndex.nameAt({1, 30});
+	const auto editorName = editor.sourceIndex.nameAt({1, 30});
+	ASSERT_TRUE(strictName);
+	ASSERT_TRUE(editorName);
+	EXPECT_EQ(strictName->kind, editorName->kind);
+	EXPECT_EQ(strictName->text, editorName->text);
+	expectSameSpan(strictName->span, editorName->span);
+
+	const auto strictCall = strict.sourceIndex.enclosingCall({1, 49});
+	const auto editorCall = editor.sourceIndex.enclosingCall({1, 49});
+	ASSERT_TRUE(strictCall);
+	ASSERT_TRUE(editorCall);
+	EXPECT_EQ(strictCall->activeArgument, editorCall->activeArgument);
+	ASSERT_EQ(strictCall->argumentRanges.size(), editorCall->argumentRanges.size());
+	for (size_t index = 0; index < strictCall->argumentRanges.size(); ++index) {
+		expectSameSpan(strictCall->argumentRanges[index], editorCall->argumentRanges[index]);
+	}
+
+	const auto strictRegionContext = strict.sourceIndex.regionContextAt({2, 32});
+	const auto editorRegionContext = editor.sourceIndex.regionContextAt({2, 32});
+	ASSERT_TRUE(strictRegionContext);
+	ASSERT_TRUE(editorRegionContext);
+	EXPECT_EQ(strictRegionContext->name, editorRegionContext->name);
+	EXPECT_EQ(strictRegionContext->activeSection, editorRegionContext->activeSection);
+	EXPECT_EQ(strictRegionContext->activeSectionEntries,
+		editorRegionContext->activeSectionEntries);
+	EXPECT_EQ(strict.sourceIndex.enumNames(), editor.sourceIndex.enumNames());
+	EXPECT_EQ(strict.sourceIndex.enumNames(), std::vector<std::string>{"Color"});
+}
+
+TEST(ParserTests, EditorModeMatchesStrictModeAcrossExamples) {
+	const auto examples = std::filesystem::path(RLS_REPO_ROOT) / "examples";
+	ASSERT_TRUE(std::filesystem::is_directory(examples));
+	size_t fileCount = 0;
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(examples)) {
+		if (!entry.is_regular_file() || entry.path().extension() != ".rls") continue;
+		++fileCount;
+		std::ifstream stream(entry.path(), std::ios::binary);
+		ASSERT_TRUE(stream) << entry.path();
+		const std::string source{
+			std::istreambuf_iterator<char>(stream),
+			std::istreambuf_iterator<char>()};
+		const auto filename = entry.path().generic_string();
+		const auto strict = rls::parser::ParseStringWithIndex(
+			source, filename, rls::parser::ParseMode::Strict);
+		const auto editor = rls::parser::ParseStringWithIndex(
+			source, filename, rls::parser::ParseMode::Editor);
+
+		EXPECT_TRUE(strict.file.diagnostics.empty()) << entry.path();
+		EXPECT_TRUE(editor.file.diagnostics.empty()) << entry.path();
+		EXPECT_EQ(strict.file.declarations.size(), editor.file.declarations.size())
+			<< entry.path();
+		ASSERT_EQ(strict.sourceIndex.declarations().size(),
+			editor.sourceIndex.declarations().size()) << entry.path();
+		for (size_t index = 0; index < strict.sourceIndex.declarations().size(); ++index) {
+			expectSameSpan(strict.sourceIndex.declarations()[index].span,
+				editor.sourceIndex.declarations()[index].span);
+		}
+		EXPECT_EQ(strict.sourceIndex.regionNames(), editor.sourceIndex.regionNames())
+			<< entry.path();
+		EXPECT_EQ(strict.sourceIndex.enumNames(), editor.sourceIndex.enumNames())
+			<< entry.path();
+
+		const auto sourceText = SourceText::FromUtf8(source);
+		ASSERT_TRUE(sourceText) << entry.path();
+		for (size_t offset = 0; offset <= source.size(); ++offset) {
+			const auto position = sourceText->utf8PositionAtByteOffset(offset);
+			ASSERT_TRUE(position) << entry.path() << " at byte " << offset;
+			const auto strictName = strict.sourceIndex.nameAt(*position);
+			const auto editorName = editor.sourceIndex.nameAt(*position);
+			ASSERT_EQ(strictName.has_value(), editorName.has_value())
+				<< entry.path() << " at byte " << offset;
+			if (strictName && editorName) {
+				EXPECT_EQ(strictName->kind, editorName->kind);
+				EXPECT_EQ(strictName->text, editorName->text);
+				expectSameSpan(strictName->span, editorName->span);
+			}
+			const auto strictSyntax = strict.sourceIndex.syntaxAt(*position);
+			const auto editorSyntax = editor.sourceIndex.syntaxAt(*position);
+			ASSERT_EQ(strictSyntax.has_value(), editorSyntax.has_value())
+				<< entry.path() << " at byte " << offset;
+			if (strictSyntax && editorSyntax) {
+				EXPECT_EQ(strictSyntax->kind, editorSyntax->kind);
+				expectSameSpan(strictSyntax->span, editorSyntax->span);
+			}
+		}
+	}
+	EXPECT_GT(fileCount, 0u);
+}
+
+TEST(ParserTests, EditorModeKeepsCompleteDeclarationsAroundMalformedSyntax) {
+	const std::string source =
+		"define before(): true\n"
+		"define broken(\n"
+		"define after(): before()\n";
+	const auto editor = rls::parser::ParseStringWithIndex(
+		source, "partial.rls", rls::parser::ParseMode::Editor);
+	const auto strict = rls::parser::ParseStringWithIndex(
+		source, "partial.rls", rls::parser::ParseMode::Strict);
+
+	ASSERT_FALSE(editor.file.diagnostics.empty());
+	ASSERT_EQ(editor.file.declarations.size(), 2u);
+	EXPECT_EQ(std::get<DefineDecl>(editor.file.declarations[0]).name, "before");
+	EXPECT_EQ(std::get<DefineDecl>(editor.file.declarations[1]).name, "after");
+	EXPECT_EQ(std::get<DefineDecl>(editor.file.declarations[1]).name.span.start.line, 3u);
+	EXPECT_TRUE(editor.sourceIndex.nameAt({1, 8}));
+	EXPECT_TRUE(editor.sourceIndex.nameAt({3, 8}));
+	EXPECT_FALSE(editor.sourceIndex.nameAt({2, 8}));
+
+	EXPECT_FALSE(strict.file.diagnostics.empty());
+	EXPECT_TRUE(strict.file.declarations.empty());
+}
+
+TEST(ParserTests, EditorModeSynchronizesAfterMalformedConstructs) {
+	const std::vector<std::string> sources = {
+		"define broken(\ndefine after(): true\n",
+		"enum Broken {\ndefine after(): true\n",
+		"region RR_BROKEN { events { EVENT_PARTIAL\ndefine after(): true\n",
+		"define broken(): target(\ndefine after(): true\n",
+		"define broken(): true ?\ndefine after(): true\n",
+	};
+
+	for (const auto& source : sources) {
+		SCOPED_TRACE(source);
+		const auto parsed = rls::parser::ParseStringWithIndex(
+			source, "synchronization.rls", rls::parser::ParseMode::Editor);
+		ASSERT_FALSE(parsed.file.diagnostics.empty());
+		ASSERT_EQ(parsed.file.declarations.size(), 1u);
+		const auto* define = std::get_if<DefineDecl>(&parsed.file.declarations[0]);
+		ASSERT_NE(define, nullptr);
+		EXPECT_EQ(define->name, "after");
+		EXPECT_EQ(define->name.span.start.line, 2u);
+	}
+}
+
+TEST(ParserTests, EditorSyntaxClassifiesCompleteAndRecoveredEnums) {
+	const auto completeSource = SourceText::FromUtf8("enum Color { RED }");
+	ASSERT_TRUE(completeSource);
+	const auto completeFile = rls::parser::ParseString(
+		completeSource->content(), "complete.rls");
+	const auto complete = rls::parser::ParseEditorSyntax(
+		*completeSource, "complete.rls", completeFile);
+	ASSERT_EQ(complete.enumDeclarations.size(), 1u);
+	EXPECT_EQ(complete.enumDeclarations[0].name.text, "Color");
+	EXPECT_EQ(complete.enumDeclarations[0].status,
+		rls::parser::SyntaxRecoveryStatus::Complete);
+
+	const auto recoveredSource = SourceText::FromUtf8("enum Color {");
+	ASSERT_TRUE(recoveredSource);
+	const auto recoveredFile = rls::parser::ParseString(
+		recoveredSource->content(), "recovered.rls");
+	const auto recovered = rls::parser::ParseEditorSyntax(
+		*recoveredSource, "recovered.rls", recoveredFile);
+	ASSERT_EQ(recovered.enumDeclarations.size(), 1u);
+	EXPECT_EQ(recovered.enumDeclarations[0].name.text, "Color");
+	EXPECT_EQ(recovered.enumDeclarations[0].status,
+		rls::parser::SyntaxRecoveryStatus::Recovered);
+	EXPECT_EQ(recovered.enumDeclarations[0].span.start.column, 1u);
+	EXPECT_EQ(recovered.enumDeclarations[0].span.end.column, 11u);
+}
+
+TEST(ParserTests, EditorSyntaxRecoversMemberAccesses) {
+	const auto source = SourceText::FromUtf8(
+		"define first(): Color.RED\n"
+		"define second(): Color.\n"
+		"define ignored(): \"Quoted.FAKE\" # Commented.FAKE\n");
+	ASSERT_TRUE(source);
+	const auto syntax = rls::parser::ParseEditorSyntax(
+		*source, "members.rls", File{});
+	ASSERT_EQ(syntax.memberAccesses.size(), 2u);
+	EXPECT_EQ(syntax.memberAccesses[0].object.text, "Color");
+	EXPECT_EQ(syntax.memberAccesses[0].memberSpan.start.column, 23u);
+	EXPECT_EQ(syntax.memberAccesses[0].memberSpan.end.column, 26u);
+	EXPECT_EQ(syntax.memberAccesses[0].status,
+		rls::parser::SyntaxRecoveryStatus::Complete);
+	EXPECT_EQ(syntax.memberAccesses[1].object.text, "Color");
+	EXPECT_EQ(syntax.memberAccesses[1].memberSpan.start.column, 24u);
+	EXPECT_EQ(syntax.memberAccesses[1].memberSpan.end.column, 24u);
+	EXPECT_EQ(syntax.memberAccesses[1].status,
+		rls::parser::SyntaxRecoveryStatus::Recovered);
+}
+
+TEST(ParserTests, EditorSyntaxRecoversFunctionTypePositions) {
+	const auto source = SourceText::FromUtf8(
+		"# define hidden(value: Fake)\n"
+		"\"extern define hidden() -> Fake\"\n"
+		"define choose(first = nested(a, b), second: Col\n"
+		"extern define convert(value: Bool) -> \n"
+		"define ignored(value = true ? false : true\n");
+	ASSERT_TRUE(source);
+	const auto syntax = rls::parser::ParseEditorSyntax(
+		*source, "types.rls", File{});
+	ASSERT_EQ(syntax.typePositions.size(), 3u);
+	EXPECT_EQ(syntax.typePositions[0].kind,
+		rls::parser::EditorTypePositionKind::Parameter);
+	EXPECT_EQ(syntax.typePositions[0].status,
+		rls::parser::SyntaxRecoveryStatus::Complete);
+	EXPECT_EQ(syntax.typePositions[1].kind,
+		rls::parser::EditorTypePositionKind::Parameter);
+	EXPECT_EQ(syntax.typePositions[1].status,
+		rls::parser::SyntaxRecoveryStatus::Complete);
+	EXPECT_EQ(syntax.typePositions[2].kind,
+		rls::parser::EditorTypePositionKind::Return);
+	EXPECT_EQ(syntax.typePositions[2].status,
+		rls::parser::SyntaxRecoveryStatus::Recovered);
 }
 
 TEST(ParserTests, WhitespaceOnlyReturnsEmpty) {
@@ -435,6 +696,401 @@ TEST(ParseExpr, CallMixedArgs) {
 	EXPECT_EQ(*call.args[1].name, "distance");
 }
 
+// == Source index ============================================================
+
+TEST(SourceIndexTests, IndexesDeclarationsNamesExpressionsAndCalls) {
+	const auto parsed = rls::parser::ParseStringWithIndex(
+		"define check(target: Item): can_kill(quantity: target, 2)\n"
+		"region RR_TEST { events { EVENT_TEST: true } }");
+	const auto& index = parsed.sourceIndex;
+
+	ASSERT_EQ(index.declarations().size(), 2u);
+	EXPECT_EQ(index.declarationsIn("in_memory").size(), 2u);
+	EXPECT_TRUE(index.declarationsIn("other.rls").empty());
+	const auto declaration = index.nameAt({1, 9});
+	ASSERT_TRUE(declaration);
+	EXPECT_EQ(declaration->kind, rls::parser::SourceNameKind::Declaration);
+	EXPECT_EQ(declaration->text, "check");
+
+	const auto parameter = index.nameAt({1, 15});
+	ASSERT_TRUE(parameter);
+	EXPECT_EQ(parameter->kind, rls::parser::SourceNameKind::Parameter);
+	EXPECT_EQ(parameter->text, "target");
+	const auto& define = std::get<DefineDecl>(parsed.file.declarations[0]);
+	ASSERT_EQ(define.params.size(), 1u);
+	EXPECT_EQ(define.params[0].span.start.column, 14u);
+	EXPECT_EQ(define.params[0].span.end.column, 26u);
+
+	const auto type = index.nameAt({1, 23});
+	ASSERT_TRUE(type);
+	EXPECT_EQ(type->kind, rls::parser::SourceNameKind::Type);
+	EXPECT_EQ(type->text, "Item");
+
+	const auto callee = index.nameAt({1, 30});
+	ASSERT_TRUE(callee);
+	EXPECT_EQ(callee->kind, rls::parser::SourceNameKind::CallCallee);
+	EXPECT_EQ(callee->text, "can_kill");
+
+	const auto syntax = index.syntaxAt({1, 30});
+	ASSERT_TRUE(syntax);
+	EXPECT_EQ(syntax->kind, rls::parser::SyntaxKind::Name);
+
+	const auto label = index.nameAt({1, 39});
+	ASSERT_TRUE(label);
+	EXPECT_EQ(label->kind, rls::parser::SourceNameKind::ArgumentLabel);
+	EXPECT_EQ(label->text, "quantity");
+
+	const auto expression = index.enclosingExpression({1, 49});
+	ASSERT_TRUE(expression);
+	EXPECT_EQ(expression->kind, rls::parser::SyntaxKind::Expression);
+
+	const auto call = index.enclosingCall({1, 49});
+	ASSERT_TRUE(call);
+	ASSERT_TRUE(call->activeArgument);
+	EXPECT_EQ(*call->activeArgument, 0u);
+	EXPECT_EQ(call->argumentRanges.size(), 2u);
+
+	const auto secondArgument = index.enclosingCall({1, 56});
+	ASSERT_TRUE(secondArgument);
+	ASSERT_TRUE(secondArgument->activeArgument);
+	EXPECT_EQ(*secondArgument->activeArgument, 1u);
+
+	const auto& region = std::get<RegionDecl>(parsed.file.declarations[1]);
+	ASSERT_EQ(region.body.sections.size(), 1u);
+	EXPECT_EQ(region.body.sections[0].span.start.line, 2u);
+	EXPECT_EQ(region.body.sections[0].span.start.column, 18u);
+	EXPECT_EQ(region.body.sections[0].span.end.line, 2u);
+	EXPECT_GT(region.body.sections[0].span.end.column, 18u);
+
+	const auto section = index.syntaxAt({2, 18});
+	ASSERT_TRUE(section);
+	EXPECT_EQ(section->kind, rls::parser::SyntaxKind::Section);
+}
+
+TEST(SourceIndexTests, IgnoresCommentsAndWhitespaceButIndexesStringsAndRecoverySafely) {
+	const auto parsed = rls::parser::ParseStringWithIndex(
+		"# a source comment\n"
+		"define label(): \"value\"\n"
+		"\n");
+	const auto& index = parsed.sourceIndex;
+	EXPECT_FALSE(index.syntaxAt({1, 4}));
+	EXPECT_FALSE(index.nameAt({1, 4}));
+	EXPECT_FALSE(index.syntaxAt({3, 1}));
+	const auto stringExpression = index.enclosingExpression({2, 18});
+	ASSERT_TRUE(stringExpression);
+	EXPECT_EQ(stringExpression->kind, rls::parser::SyntaxKind::Expression);
+
+	const auto malformed = rls::parser::ParseStringWithIndex("define broken(");
+	EXPECT_FALSE(malformed.file.diagnostics.empty());
+	EXPECT_TRUE(malformed.sourceIndex.declarations().empty());
+	EXPECT_FALSE(malformed.sourceIndex.syntaxAt({1, 8}));
+	EXPECT_FALSE(malformed.sourceIndex.nameAt({1, 8}));
+}
+
+TEST(SourceIndexTests, ReportsCompleteAndRecoveredRegionContexts) {
+	const auto complete = rls::parser::ParseStringWithIndex(
+		"region RR_TEST {\n"
+		"  name: \"} region RR_FAKE {\"\n"
+		"  # locations { FAKE: true }\n"
+		"  events { EVENT_TEST: here == here }\n"
+		"}\n"
+		"extend region RR_TEST { locations {  } }\n",
+		"regions.rls");
+	const auto region = complete.sourceIndex.regionContextAt({2, 3});
+	ASSERT_TRUE(region);
+	EXPECT_FALSE(region->extension);
+	EXPECT_EQ(region->dataKeys, std::vector<std::string>{"name"});
+	EXPECT_EQ(region->sectionKinds,
+		std::vector<SectionKind>{SectionKind::Events});
+	EXPECT_FALSE(region->activeSection);
+	const auto event = complete.sourceIndex.regionContextAt({4, 24});
+	ASSERT_TRUE(event);
+	EXPECT_EQ(event->activeSection, SectionKind::Events);
+	const auto extension = complete.sourceIndex.regionContextAt({6, 36});
+	ASSERT_TRUE(extension);
+	EXPECT_TRUE(extension->extension);
+	EXPECT_EQ(extension->activeSection, SectionKind::Locations);
+
+	const auto recovered = rls::parser::ParseStringWithIndex(
+		"region RR_BROKEN {\n"
+		"  name: \"Broken\"\n"
+		"  loc\n",
+		"broken-region.rls", rls::parser::ParseMode::Editor);
+	ASSERT_FALSE(recovered.file.diagnostics.empty());
+	const auto recoveredRegion = recovered.sourceIndex.regionContextAt({3, 5});
+	ASSERT_TRUE(recoveredRegion);
+	EXPECT_FALSE(recoveredRegion->extension);
+	EXPECT_EQ(recoveredRegion->dataKeys, std::vector<std::string>{"name"});
+
+	const auto recoveredExtension = rls::parser::ParseStringWithIndex(
+		"extend region RR_BROKEN { events { EVENT_PARTIAL\n"
+		"region RR_NEXT {\n",
+		"broken-extension.rls", rls::parser::ParseMode::Editor);
+	const auto extensionContext =
+		recoveredExtension.sourceIndex.regionContextAt({1, 49});
+	ASSERT_TRUE(extensionContext);
+	EXPECT_TRUE(extensionContext->extension);
+	EXPECT_EQ(extensionContext->activeSection, SectionKind::Events);
+	EXPECT_EQ(recoveredExtension.sourceIndex.regionNames(),
+		std::vector<std::string>{"RR_NEXT"});
+
+	const auto strict = rls::parser::ParseStringWithIndex(
+		"region RR_BROKEN {", "strict-region.rls",
+		rls::parser::ParseMode::Strict);
+	EXPECT_FALSE(strict.sourceIndex.regionContextAt({1, 19}));
+}
+
+TEST(SourceIndexTests, ReportsRecoveredSectionEntryLabelContexts) {
+	const auto parsed = rls::parser::ParseStringWithIndex(
+		"region RR_TEST {\n"
+		"  events {\n"
+		"    EVENT_EXISTING: true\n"
+		"    EVENT_PAR\n"
+		"  }\n"
+		"  locations {\n"
+		"    \n"
+		"  }\n"
+		"}\n",
+		"section-entries.rls", rls::parser::ParseMode::Editor);
+	ASSERT_FALSE(parsed.file.diagnostics.empty());
+
+	const auto event = parsed.sourceIndex.sectionEntryAt({4, 14});
+	ASSERT_TRUE(event);
+	EXPECT_EQ(event->kind, SectionKind::Events);
+	EXPECT_EQ(event->labelSpan.start.column, 5u);
+	EXPECT_EQ(event->labelSpan.end.column, 14u);
+	const auto eventRegion = parsed.sourceIndex.regionContextAt({4, 14});
+	ASSERT_TRUE(eventRegion);
+	EXPECT_EQ(eventRegion->name, "RR_TEST");
+	EXPECT_EQ(eventRegion->activeSection, SectionKind::Events);
+	EXPECT_EQ(eventRegion->activeSectionEntries,
+		std::vector<std::string>{"EVENT_EXISTING"});
+	EXPECT_EQ(parsed.sourceIndex.sectionEntryNames(SectionKind::Events),
+		std::vector<std::string>{"EVENT_EXISTING"});
+	EXPECT_EQ(parsed.sourceIndex.sectionEntryNames(
+		SectionKind::Events, "RR_TEST"),
+		std::vector<std::string>{"EVENT_EXISTING"});
+	EXPECT_EQ(parsed.sourceIndex.regionNames(),
+		std::vector<std::string>{"RR_TEST"});
+
+	const auto location = parsed.sourceIndex.sectionEntryAt({7, 5});
+	ASSERT_TRUE(location);
+	EXPECT_EQ(location->kind, SectionKind::Locations);
+	EXPECT_EQ(location->labelSpan.start.column, 5u);
+	EXPECT_EQ(location->labelSpan.end.column, 5u);
+	EXPECT_FALSE(parsed.sourceIndex.sectionEntryAt({3, 21}));
+
+	const auto strict = rls::parser::ParseStringWithIndex(
+		"region RR_TEST { events { EVENT_PARTIAL",
+		"strict-section.rls", rls::parser::ParseMode::Strict);
+	EXPECT_FALSE(strict.sourceIndex.sectionEntryAt({1, 46}));
+}
+
+TEST(SourceIndexTests, ReportsCompleteAndRecoveredMemberAccessContexts) {
+	const auto complete = rls::parser::ParseStringWithIndex(
+		"define check(): Color.RED\n", "member.rls");
+	const auto completeMember = complete.sourceIndex.memberAccessAt({1, 24});
+	ASSERT_TRUE(completeMember);
+	EXPECT_EQ(completeMember->object, "Color");
+	EXPECT_EQ(completeMember->memberSpan.start.column, 23u);
+	EXPECT_EQ(completeMember->memberSpan.end.column, 26u);
+	EXPECT_FALSE(complete.sourceIndex.memberAccessAt({1, 20}));
+
+	const auto recovered = rls::parser::ParseStringWithIndex(
+		"define first(): Color.\n"
+		"define second(): Color.R\n"
+		"define ignored(): \"Color.FAKE\" # Color.COMMENT\n",
+		"recovered-member.rls", rls::parser::ParseMode::Editor);
+	ASSERT_FALSE(recovered.file.diagnostics.empty());
+	const auto emptyMember = recovered.sourceIndex.memberAccessAt({1, 23});
+	ASSERT_TRUE(emptyMember);
+	EXPECT_EQ(emptyMember->object, "Color");
+	EXPECT_EQ(emptyMember->memberSpan.start.column, 23u);
+	EXPECT_EQ(emptyMember->memberSpan.end.column, 23u);
+	const auto partialMember = recovered.sourceIndex.memberAccessAt({2, 25});
+	ASSERT_TRUE(partialMember);
+	EXPECT_EQ(partialMember->object, "Color");
+	EXPECT_FALSE(recovered.sourceIndex.memberAccessAt({3, 31}));
+
+	const auto strict = rls::parser::ParseStringWithIndex(
+		"define first(): Color.",
+		"strict-member.rls", rls::parser::ParseMode::Strict);
+	EXPECT_FALSE(strict.sourceIndex.memberAccessAt({1, 23}));
+}
+
+TEST(SourceIndexTests, ReportsRecoveredNamedArgumentContexts) {
+	const auto emptySource = rls::parser::ParseStringWithIndex(
+		"define first(): target(", "empty-argument.rls",
+		rls::parser::ParseMode::Editor);
+	ASSERT_FALSE(emptySource.file.diagnostics.empty());
+	const auto empty = emptySource.sourceIndex.namedArgumentAt({1, 24});
+	ASSERT_TRUE(empty);
+	EXPECT_EQ(empty->callee, "target");
+	EXPECT_EQ(empty->activeArgument, 0u);
+	ASSERT_EQ(empty->argumentLabels.size(), 1u);
+	EXPECT_FALSE(empty->argumentLabels[0]);
+	EXPECT_EQ(empty->labelSpan.start.column, 24u);
+	EXPECT_EQ(empty->labelSpan.end.column, 24u);
+	const auto emptyValue = emptySource.sourceIndex.callArgumentAt({1, 24});
+	ASSERT_TRUE(emptyValue);
+	EXPECT_EQ(emptyValue->callee, "target");
+	EXPECT_EQ(emptyValue->activeArgument, 0u);
+	const auto emptyCall = emptySource.sourceIndex.enclosingCall({1, 24});
+	ASSERT_TRUE(emptyCall);
+	EXPECT_EQ(emptyCall->activeArgument, 0u);
+
+	const auto partialSource = rls::parser::ParseStringWithIndex(
+		"define second(): target(first: true, se", "partial-argument.rls",
+		rls::parser::ParseMode::Editor);
+	ASSERT_FALSE(partialSource.file.diagnostics.empty());
+	const auto partial = partialSource.sourceIndex.namedArgumentAt({1, 40});
+	ASSERT_TRUE(partial);
+	EXPECT_EQ(partial->callee, "target");
+	EXPECT_EQ(partial->activeArgument, 1u);
+	ASSERT_EQ(partial->argumentLabels.size(), 2u);
+	EXPECT_EQ(partial->argumentLabels[0], "first");
+	EXPECT_FALSE(partial->argumentLabels[1]);
+	const auto namedValue = partialSource.sourceIndex.callArgumentAt({1, 32});
+	ASSERT_TRUE(namedValue);
+	EXPECT_EQ(namedValue->activeArgument, 0u);
+	EXPECT_EQ(namedValue->valueSpan.start.column, 32u);
+	const auto partialValue = partialSource.sourceIndex.callArgumentAt({1, 40});
+	ASSERT_TRUE(partialValue);
+	EXPECT_EQ(partialValue->activeArgument, 1u);
+
+	const auto nestedSource = rls::parser::ParseStringWithIndex(
+		"define third(): target(true, nested(value), th", "nested-argument.rls",
+		rls::parser::ParseMode::Editor);
+	ASSERT_FALSE(nestedSource.file.diagnostics.empty());
+	const auto nested = nestedSource.sourceIndex.namedArgumentAt({1, 47});
+	ASSERT_TRUE(nested);
+	EXPECT_EQ(nested->callee, "target");
+	EXPECT_EQ(nested->activeArgument, 2u);
+	ASSERT_EQ(nested->argumentLabels.size(), 3u);
+	EXPECT_FALSE(nested->argumentLabels[0]);
+	EXPECT_FALSE(nested->argumentLabels[1]);
+	EXPECT_FALSE(nested->argumentLabels[2]);
+	const auto nestedValue = nestedSource.sourceIndex.callArgumentAt({1, 38});
+	ASSERT_TRUE(nestedValue);
+	EXPECT_EQ(nestedValue->callee, "nested");
+	EXPECT_EQ(nestedValue->activeArgument, 0u);
+
+	const std::string blankNamedSource =
+		"define fourth(): target(first:";
+	const auto blankNamed = rls::parser::ParseStringWithIndex(
+		blankNamedSource, "blank-named-argument.rls",
+		rls::parser::ParseMode::Editor);
+	const auto blankNamedValue = blankNamed.sourceIndex.callArgumentAt({1, 31});
+	ASSERT_TRUE(blankNamedValue);
+	EXPECT_EQ(blankNamedValue->argumentLabels[0], "first");
+	EXPECT_EQ(blankNamedValue->valueSpan.start.line,
+		blankNamedValue->valueSpan.end.line);
+	EXPECT_EQ(blankNamedValue->valueSpan.start.column,
+		blankNamedValue->valueSpan.end.column);
+
+	const std::string trailingSlotSource =
+		"define fifth(): target(first: true, ";
+	const auto trailingSlot = rls::parser::ParseStringWithIndex(
+		trailingSlotSource, "trailing-call-slot.rls",
+		rls::parser::ParseMode::Editor);
+	const auto trailingValue = trailingSlot.sourceIndex.callArgumentAt({1, 37});
+	ASSERT_TRUE(trailingValue);
+	EXPECT_EQ(trailingValue->activeArgument, 1u);
+	ASSERT_EQ(trailingValue->argumentLabels.size(), 2u);
+	EXPECT_EQ(trailingValue->argumentLabels[0], "first");
+	EXPECT_FALSE(trailingValue->argumentLabels[1]);
+
+	const auto ignored = rls::parser::ParseStringWithIndex(
+		"define text(): \"target(fake:)\" # target(comment:)\n"
+		"define broken(",
+		"ignored-calls.rls", rls::parser::ParseMode::Editor);
+	EXPECT_FALSE(ignored.sourceIndex.callArgumentAt({1, 28}));
+	EXPECT_FALSE(ignored.sourceIndex.namedArgumentAt({1, 46}));
+
+	const auto strict = rls::parser::ParseStringWithIndex(
+		"define strict(): target(", "strict-argument.rls",
+		rls::parser::ParseMode::Strict);
+	EXPECT_FALSE(strict.sourceIndex.namedArgumentAt({1, 25}));
+	EXPECT_FALSE(strict.sourceIndex.callArgumentAt({1, 25}));
+
+	const auto closedTrailingSlot = rls::parser::ParseStringWithIndex(
+		"define sixth(): target(true,)", "closed-trailing-slot.rls",
+		rls::parser::ParseMode::Editor);
+	const auto closedCall = closedTrailingSlot.sourceIndex.enclosingCall({1, 29});
+	ASSERT_TRUE(closedCall);
+	EXPECT_EQ(closedCall->activeArgument, 1u);
+	ASSERT_EQ(closedCall->argumentRanges.size(), 2u);
+	EXPECT_EQ(closedCall->argumentRanges[1].start.column, 29u);
+	EXPECT_EQ(closedCall->argumentRanges[1].end.column, 29u);
+}
+
+TEST(SourceIndexTests, ReportsRecoveredFunctionTypePositions) {
+	const auto positionAtEnd = [](const std::string& source) {
+		const auto text = SourceText::FromUtf8(source);
+		EXPECT_TRUE(text);
+		return *text->utf8PositionAtByteOffset(source.size());
+	};
+
+	const std::string parameterSource =
+		"enum Color { RED }\ndefine choose(value: Col";
+	const auto parameter = rls::parser::ParseStringWithIndex(
+		parameterSource, "parameter-type.rls", rls::parser::ParseMode::Editor);
+	ASSERT_FALSE(parameter.file.diagnostics.empty());
+	const auto parameterType = parameter.sourceIndex.typePositionAt(
+		positionAtEnd(parameterSource));
+	ASSERT_TRUE(parameterType);
+	EXPECT_EQ(parameter.sourceIndex.enumNames(), std::vector<std::string>{"Color"});
+	const auto strictParameter = rls::parser::ParseStringWithIndex(
+		parameterSource, "parameter-type.rls", rls::parser::ParseMode::Strict);
+	EXPECT_TRUE(strictParameter.sourceIndex.enumNames().empty());
+
+	const auto filteredEnums = rls::parser::ParseStringWithIndex(
+		"# enum Commented { VALUE }\n"
+		"define text(): \"enum Quoted { VALUE }\"\n"
+		"enum Real { VALUE }\n"
+		"define broken(",
+		"filtered-enums.rls", rls::parser::ParseMode::Editor);
+	EXPECT_EQ(filteredEnums.sourceIndex.enumNames(),
+		std::vector<std::string>{"Real"});
+
+	const std::string blankParameterSource = "define choose(value: ";
+	const auto blankParameter = rls::parser::ParseStringWithIndex(
+		blankParameterSource, "blank-parameter-type.rls",
+		rls::parser::ParseMode::Editor);
+	const auto blankParameterType = blankParameter.sourceIndex.typePositionAt(
+		positionAtEnd(blankParameterSource));
+	ASSERT_TRUE(blankParameterType);
+	EXPECT_EQ(blankParameterType->typeSpan.start.column, 21u);
+	EXPECT_EQ(blankParameterType->typeSpan.end.column, 22u);
+
+	const std::string returnSource =
+		"extern define choose(value: Bool) -> Col";
+	const auto returnType = rls::parser::ParseStringWithIndex(
+		returnSource, "return-type.rls");
+	ASSERT_TRUE(returnType.file.diagnostics.empty());
+	EXPECT_TRUE(returnType.sourceIndex.typePositionAt(positionAtEnd(returnSource)));
+
+	const std::string blankReturnSource = "extern define choose() -> ";
+	const auto blankReturn = rls::parser::ParseStringWithIndex(
+		blankReturnSource, "blank-return-type.rls",
+		rls::parser::ParseMode::Editor);
+	EXPECT_TRUE(blankReturn.sourceIndex.typePositionAt(
+		positionAtEnd(blankReturnSource)));
+
+	const std::string defaultSource =
+		"define choose(value = true ? false : tru";
+	const auto defaultExpression = rls::parser::ParseStringWithIndex(
+		defaultSource, "default-expression.rls", rls::parser::ParseMode::Editor);
+	EXPECT_FALSE(defaultExpression.sourceIndex.typePositionAt(
+		positionAtEnd(defaultSource)));
+
+	const auto strictBlank = rls::parser::ParseStringWithIndex(
+		blankParameterSource, "strict-blank-type.rls",
+		rls::parser::ParseMode::Strict);
+	EXPECT_FALSE(strictBlank.sourceIndex.typePositionAt(
+		positionAtEnd(blankParameterSource)));
+}
+
 TEST(ParseExpr, NestedCalls) {
 	const auto& e = parseExpr("can_use(setting(RSK_FOO))");
 	ASSERT_TRUE(std::holds_alternative<CallExpr>(e.node));
@@ -552,6 +1208,89 @@ TEST(ParseExpr, SpanIsNonZero) {
 	const auto& def = std::get<DefineDecl>(file.declarations[0]);
 	EXPECT_GT(def.span.start.line, 0u);
 	EXPECT_GT(def.span.start.column, 0u);
+}
+
+TEST(ParseSpans, PreservesCompleteRangesForAstNodes) {
+	const auto file = parse(
+		"region RR_TEST {\n"
+		"  name: \"Test\"\n"
+		"  events {\n"
+		"    EVENT_TEST: has(ITEM) and true\n"
+		"  }\n"
+		"}\n"
+		"define check(value: Item): not Item.VALUE and make_cond([1, 2])() ? true : false\n"
+		"enum Color { RED, GREEN = 2 }\n"
+		"extern enum External { VALUE, EXT_* }\n");
+
+	auto expectCompleteSpan = [](const Span& span) {
+		EXPECT_EQ(span.file, "in_memory");
+		EXPECT_GT(span.start.line, 0u);
+		EXPECT_GT(span.start.column, 0u);
+		EXPECT_TRUE(span.end.line > span.start.line ||
+			(span.end.line == span.start.line && span.end.column > span.start.column));
+	};
+	auto expectPosition = [](Position actual, uint32_t line, uint32_t column) {
+		EXPECT_EQ(actual.line, line);
+		EXPECT_EQ(actual.column, column);
+	};
+
+	ASSERT_EQ(file.declarations.size(), 4u);
+	const auto& region = std::get<RegionDecl>(file.declarations[0]);
+	expectCompleteSpan(region.span);
+	expectPosition(region.span.start, 1, 1);
+	expectPosition(region.span.end, 6, 2);
+	ASSERT_EQ(region.body.data.size(), 1u);
+	expectCompleteSpan(region.body.data[0].span);
+	expectPosition(region.body.data[0].span.start, 2, 3);
+	expectPosition(region.body.data[0].span.end, 2, 15);
+	expectCompleteSpan(region.body.data[0].key.span);
+	expectCompleteSpan(region.body.data[0].value->span);
+	ASSERT_EQ(region.body.sections.size(), 1u);
+	const auto& section = region.body.sections[0];
+	expectCompleteSpan(section.span);
+	expectPosition(section.span.start, 3, 3);
+	expectPosition(section.span.end, 5, 4);
+	ASSERT_EQ(section.entries.size(), 1u);
+	expectCompleteSpan(section.entries[0].span);
+	expectPosition(section.entries[0].span.start, 4, 5);
+	expectPosition(section.entries[0].span.end, 4, 35);
+	expectCompleteSpan(section.entries[0].name.span);
+	expectCompleteSpan(section.entries[0].condition->span);
+
+	const auto& define = std::get<DefineDecl>(file.declarations[1]);
+	expectCompleteSpan(define.span);
+	expectCompleteSpan(define.name.span);
+	expectCompleteSpan(define.params[0].name.span);
+	expectCompleteSpan(define.params[0].type->name.span);
+	expectCompleteSpan(define.body->span);
+	const auto& ternary = std::get<TernaryExpr>(define.body->node);
+	expectCompleteSpan(ternary.condition->span);
+	const auto& logical = std::get<BinaryExpr>(ternary.condition->node);
+	expectCompleteSpan(logical.left->span);
+	const auto& member = std::get<MemberExpr>(std::get<UnaryExpr>(logical.left->node).operand->node);
+	expectCompleteSpan(member.object.span);
+	expectCompleteSpan(member.member.span);
+	const auto& invoke = std::get<InvokeExpr>(logical.right->node);
+	expectCompleteSpan(invoke.callee->span);
+	const auto& call = std::get<CallExpr>(invoke.callee->node);
+	expectCompleteSpan(call.callee.span);
+	expectCompleteSpan(call.args[0].value->span);
+
+	const auto& enumDecl = std::get<EnumDecl>(file.declarations[2]);
+	expectCompleteSpan(enumDecl.span);
+	expectCompleteSpan(enumDecl.name.span);
+	for (const auto& member : enumDecl.members) {
+		expectCompleteSpan(member.span);
+		expectCompleteSpan(member.name.span);
+	}
+
+	const auto& externEnum = std::get<ExternEnumDecl>(file.declarations[3]);
+	expectCompleteSpan(externEnum.span);
+	expectCompleteSpan(externEnum.name.span);
+	const auto& externalMember = std::get<EnumMemberDecl>(externEnum.entries[0]);
+	expectCompleteSpan(externalMember.span);
+	expectCompleteSpan(externalMember.name.span);
+	expectCompleteSpan(std::get<EnumPatternDecl>(externEnum.entries[1]).span);
 }
 
 // == Define declaration =======================================================
@@ -741,8 +1480,10 @@ TEST(ParseMemberAccess, BasicDottedAccess) {
 
 TEST(ParseMemberAccess, SpanIsNonZero) {
 	const auto& expr = parseExpr("Item.RG_HOOKSHOT");
-	// Structural (remove_content) nodes have a valid start position but no end.
-	EXPECT_GT(expr.span.start.column, 0u);
+	EXPECT_EQ(expr.span.start.line, 1u);
+	EXPECT_EQ(expr.span.start.column, 13u);
+	EXPECT_EQ(expr.span.end.line, 1u);
+	EXPECT_EQ(expr.span.end.column, 29u);
 }
 
 TEST(ParseMemberAccess, UsedAsCallArg) {

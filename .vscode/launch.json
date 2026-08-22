@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run RLS Language Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "preLaunchTask": "Prepare RLS Language Extension",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/editors/vscode"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/editors/vscode/out/**/*.js"
+      ]
+    }
+  ]
+}
