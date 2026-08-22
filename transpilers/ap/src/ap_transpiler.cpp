@@ -18,7 +18,7 @@ const std::vector<rls::ast::Diagnostic>& ApTranspiler::Diagnostics() const {
 }
 
 void ApTranspiler::Diagnose(const rls::ast::Span& span, std::string message) const {
-	diagnostics.push_back({rls::ast::DiagnosticLevel::Error, std::move(message), span});
+	diagnostics.push_back({"", span, rls::ast::DiagnosticLevel::Error, std::move(message)});
 }
 
 // == Default hook implementations =============================================

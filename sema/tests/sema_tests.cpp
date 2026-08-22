@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <stop_token>
+
 #include <gtest/gtest.h>
 
 #include "ast.h"
@@ -103,6 +106,636 @@ static size_t countWarnings(const std::vector<Diagnostic>& diags) {
 	for (const auto& d : diags)
 		if (d.level == DiagnosticLevel::Warning) ++n;
 	return n;
+}
+
+// == Semantic index ===========================================================
+
+TEST(AnalysisSnapshotTests, OwnsExplicitSourcesAndDerivedIndexes) {
+	const auto snapshot = AnalysisSnapshot::Create({
+		{"overlay.rls", "define check(): true\ndefine run(): check()\n"},
+	}, 42);
+	ASSERT_TRUE(snapshot);
+	EXPECT_EQ((*snapshot)->generation(), 42u);
+	ASSERT_EQ((*snapshot)->documentCount(), 1u);
+	const auto* sourceText = (*snapshot)->sourceText("overlay.rls");
+	ASSERT_NE(sourceText, nullptr);
+	EXPECT_EQ(sourceText->content(), "define check(): true\ndefine run(): check()\n");
+	const auto* sourceIndex = (*snapshot)->sourceIndex("overlay.rls");
+	ASSERT_NE(sourceIndex, nullptr);
+	EXPECT_TRUE(sourceIndex->nameAt({1, 8}));
+	EXPECT_TRUE((*snapshot)->syntaxAt("overlay.rls", {1, 8}));
+	EXPECT_TRUE((*snapshot)->nameAt("overlay.rls", {1, 8}));
+	const auto symbol = (*snapshot)->symbolAt("overlay.rls", {1, 8});
+	ASSERT_TRUE(symbol);
+	EXPECT_TRUE((*snapshot)->declaration(*symbol));
+	EXPECT_FALSE((*snapshot)->references(*symbol).empty());
+	EXPECT_FALSE((*snapshot)->visibleSymbolsAt("overlay.rls", {2, 15}).empty());
+	const auto type = (*snapshot)->typeAt("overlay.rls", {1, 17});
+	ASSERT_TRUE(type);
+	EXPECT_EQ(type->type, Type::Bool);
+	EXPECT_FALSE((*snapshot)->expectedTypeAt("overlay.rls", {1, 17}));
+	const auto call = (*snapshot)->callAt("overlay.rls", {2, 15});
+	ASSERT_TRUE(call);
+	EXPECT_TRUE(call->target);
+	EXPECT_FALSE((*snapshot)->diagnosticsFor("overlay.rls").empty());
+	EXPECT_TRUE((*snapshot)->diagnosticsFor("other.rls").empty());
+
+	EXPECT_FALSE(AnalysisSnapshot::Create(
+		std::vector<SourceInput>{{"bad.rls", std::string("\xC3\x28", 2)}}, 43));
+
+	const auto overlay = AnalysisSnapshot::Create({
+		{"overlay.rls", "define check(): true\n"},
+		{"overlay.rls", "define check(): false\n"},
+	}, 44);
+	ASSERT_TRUE(overlay);
+	EXPECT_EQ((*overlay)->documentCount(), 1u);
+	EXPECT_EQ((*overlay)->sourceText("overlay.rls")->content(), "define check(): false\n");
+}
+
+TEST(AnalysisSnapshotTests, HonorsCancellationBeforeWorkStarts) {
+	std::stop_source cancellation;
+	cancellation.request_stop();
+
+	EXPECT_FALSE(AnalysisSnapshot::Create({
+		{"cancelled.rls", "define cancelled(): true\n"},
+	}, 45, cancellation.get_token()));
+}
+
+TEST(AnalysisSnapshotTests, IsolatesParseFailuresAcrossExplicitSources) {
+	const auto first = AnalysisSnapshot::Create({
+		{"broken.rls", "define broken(\n"},
+		{"valid.rls", "define valid(): true\n"},
+	}, 100);
+	ASSERT_TRUE(first);
+	ASSERT_EQ((*first)->documentCount(), 2u);
+	EXPECT_FALSE((*first)->diagnosticsFor("broken.rls").empty());
+	const auto* validIndex = (*first)->sourceIndex("valid.rls");
+	ASSERT_NE(validIndex, nullptr);
+	EXPECT_TRUE(validIndex->nameAt({1, 8}));
+	EXPECT_TRUE(std::any_of((*first)->semanticIndex().symbols().begin(),
+		(*first)->semanticIndex().symbols().end(), [](const SymbolRecord& symbol) {
+			return symbol.category == SymbolCategory::Define && symbol.displayName == "valid";
+		}));
+
+	const auto second = AnalysisSnapshot::Create({
+		{"valid.rls", "define valid(): false\n"},
+	}, 101);
+	ASSERT_TRUE(second);
+	EXPECT_EQ((*first)->generation(), 100u);
+	EXPECT_EQ((*second)->generation(), 101u);
+	EXPECT_EQ((*first)->sourceText("valid.rls")->content(), "define valid(): true\n");
+	EXPECT_EQ((*second)->sourceText("valid.rls")->content(), "define valid(): false\n");
+}
+
+TEST(AnalysisSnapshotTests, AnalyzesCompleteNeighborsInMalformedDocument) {
+	const auto snapshot = AnalysisSnapshot::Create({{
+		"partial.rls",
+		"define before(): true\n"
+		"define broken(\n"
+		"define after(): before()\n",
+	}}, 102);
+	ASSERT_TRUE(snapshot);
+	EXPECT_FALSE((*snapshot)->diagnosticsFor("partial.rls").empty());
+
+	const auto& symbols = (*snapshot)->semanticIndex().symbols();
+	const auto hasDefine = [&](std::string_view name) {
+		return std::any_of(symbols.begin(), symbols.end(), [&](const SymbolRecord& symbol) {
+			return symbol.category == SymbolCategory::Define
+				&& symbol.displayName == name;
+		});
+	};
+	EXPECT_TRUE(hasDefine("before"));
+	EXPECT_TRUE(hasDefine("after"));
+	EXPECT_FALSE(hasDefine("broken"));
+
+	const auto before = (*snapshot)->symbolAt("partial.rls", {1, 8});
+	const auto reference = (*snapshot)->symbolAt("partial.rls", {3, 18});
+	ASSERT_TRUE(before);
+	ASSERT_TRUE(reference);
+	EXPECT_EQ(*reference, *before);
+	EXPECT_FALSE((*snapshot)->symbolAt("partial.rls", {2, 8}));
+}
+
+TEST(AnalysisSnapshotTests, ResolvesOnlyTrustworthyRecoveredCalls) {
+	const std::string declarations =
+		"enum Color { RED, BLUE }\n"
+		"extern define paint(color: Color, enabled: Bool) -> Bool\n";
+	const auto endPosition = [](std::string_view source) {
+		const auto text = SourceText::FromUtf8(std::string(source));
+		EXPECT_TRUE(text);
+		return *text->utf8PositionAtByteOffset(source.size());
+	};
+
+	const std::string validUsage = "define use(): paint(R";
+	const auto valid = AnalysisSnapshot::Create({
+		{"declarations.rls", declarations},
+		{"valid-usage.rls", validUsage},
+	}, 103);
+	ASSERT_TRUE(valid);
+	const auto validPosition = endPosition(validUsage);
+	const auto call = (*valid)->callAt("valid-usage.rls", validPosition);
+	ASSERT_TRUE(call);
+	ASSERT_TRUE(call->target);
+	ASSERT_EQ(call->normalizedBindings.size(), 1u);
+	EXPECT_EQ(call->normalizedBindings[0], 0u);
+	const auto expected = (*valid)->expectedTypeAt(
+		"valid-usage.rls", validPosition);
+	ASSERT_TRUE(expected);
+	EXPECT_EQ(expected->type, Type::Enum);
+	EXPECT_EQ(expected->enumName, "Color");
+
+	const std::string unknownLabelUsage =
+		"define use(): paint(missing: R";
+	const auto unknownLabel = AnalysisSnapshot::Create({
+		{"declarations.rls", declarations},
+		{"unknown-label.rls", unknownLabelUsage},
+	}, 104);
+	ASSERT_TRUE(unknownLabel);
+	const auto unknownPosition = endPosition(unknownLabelUsage);
+	EXPECT_FALSE((*unknownLabel)->callAt("unknown-label.rls", unknownPosition));
+	EXPECT_FALSE((*unknownLabel)->expectedTypeAt(
+		"unknown-label.rls", unknownPosition));
+
+	const std::string duplicateLabelUsage =
+		"define use(): paint(color: RED, color: R";
+	const auto duplicateLabel = AnalysisSnapshot::Create({
+		{"declarations.rls", declarations},
+		{"duplicate-label.rls", duplicateLabelUsage},
+	}, 105);
+	ASSERT_TRUE(duplicateLabel);
+	const auto duplicatePosition = endPosition(duplicateLabelUsage);
+	EXPECT_FALSE((*duplicateLabel)->callAt(
+		"duplicate-label.rls", duplicatePosition));
+	EXPECT_FALSE((*duplicateLabel)->expectedTypeAt(
+		"duplicate-label.rls", duplicatePosition));
+
+	const std::string ambiguousUsage = "define use(): paint(R";
+	const auto ambiguous = AnalysisSnapshot::Create({
+		{"first.rls", "extern define paint(color: Color) -> Bool\n"},
+		{"second.rls", "extern define paint(color: Color) -> Bool\n"},
+		{"ambiguous.rls", ambiguousUsage},
+	}, 106);
+	ASSERT_TRUE(ambiguous);
+	const auto ambiguousPosition = endPosition(ambiguousUsage);
+	EXPECT_FALSE((*ambiguous)->callAt("ambiguous.rls", ambiguousPosition));
+	EXPECT_FALSE((*ambiguous)->expectedTypeAt(
+		"ambiguous.rls", ambiguousPosition));
+}
+
+TEST(AnalysisSnapshotTests, ExposesStructuredValidationDiagnostics) {
+	const auto snapshot = AnalysisSnapshot::Create({
+		{"validation.rls", "region RR_TEST { events { EVENT_TEST: \"invalid\" } }\n"},
+	}, 102);
+	ASSERT_TRUE(snapshot);
+	const auto diagnostics = (*snapshot)->diagnosticsFor("validation.rls");
+	const auto diagnostic = std::find_if(diagnostics.begin(), diagnostics.end(), [](const CompilerDiagnostic& candidate) {
+			return candidate.code == "RLS-V004";
+		});
+	ASSERT_NE(diagnostic, diagnostics.end());
+	EXPECT_EQ(diagnostic->level, DiagnosticLevel::Error);
+	EXPECT_EQ(diagnostic->span.file, "validation.rls");
+	EXPECT_NE(diagnostic->message.find("must be Bool"), std::string::npos);
+}
+
+TEST(AnalysisSnapshotTests, PreservesStructuredDiagnosticActionData) {
+	const auto snapshot = AnalysisSnapshot::Create({
+		{"actions.rls", "define broken(): missing\n"},
+	}, 104);
+	ASSERT_TRUE(snapshot);
+	const auto diagnostics = (*snapshot)->diagnosticsFor("actions.rls");
+	const auto diagnostic = std::find_if(diagnostics.begin(), diagnostics.end(),
+		[](const CompilerDiagnostic& candidate) { return candidate.code == "RLS-T006"; });
+	ASSERT_NE(diagnostic, diagnostics.end());
+	ASSERT_TRUE(diagnostic->data.has_value());
+	EXPECT_EQ(diagnostic->data->version, 1u);
+	EXPECT_EQ(diagnostic->data->actionKind, "rls.declareSymbol");
+	ASSERT_EQ(diagnostic->data->arguments.size(), 1u);
+	EXPECT_EQ(diagnostic->data->arguments[0], "missing");
+}
+
+TEST(AnalysisSnapshotTests, RelatesDuplicateRegionDataToFirstDefinition) {
+	const auto snapshot = AnalysisSnapshot::Create({
+		{"duplicate-data.rls", "region RR_TEST { name: \"First\" name: \"Second\" }\n"},
+	}, 103);
+	ASSERT_TRUE(snapshot);
+	const auto diagnostics = (*snapshot)->diagnosticsFor("duplicate-data.rls");
+	const auto diagnostic = std::find_if(diagnostics.begin(), diagnostics.end(),
+		[](const CompilerDiagnostic& candidate) { return candidate.code == "RLS-V002"; });
+	ASSERT_NE(diagnostic, diagnostics.end());
+	ASSERT_EQ(diagnostic->related.size(), 1u);
+	EXPECT_EQ(diagnostic->related[0].message, "first definition");
+	EXPECT_EQ(diagnostic->related[0].span.file, "duplicate-data.rls");
+	EXPECT_LT(diagnostic->related[0].span.start.column, diagnostic->span.start.column);
+}
+
+TEST(SemanticIndexTests, RecordsStableValueOnlyDeclarationIdentity) {
+	SemanticIndex index;
+	{
+		Project project;
+		project.files.push_back(rls::parser::ParseString(
+			"region RR_TEST { name: \"Test\" events { EVENT_TEST: true } }\n"
+			"define check(value: Color): true\n"
+			"extern define external(value: Color) -> Bool\n"
+			"enum Color { RED }\n"
+			"extern enum External { VALUE, EXT_* }\n",
+			"semantic.rls"));
+		analyze(project);
+		index = buildSemanticIndex(project);
+	}
+
+	auto findSymbol = [&](SymbolCategory category, std::string_view displayName) {
+		for (const auto& symbol : index.symbols()) {
+			if (symbol.category == category && symbol.displayName == displayName) {
+				return std::optional<SymbolRecord>(symbol);
+			}
+		}
+		return std::optional<SymbolRecord>{};
+	};
+
+	ASSERT_EQ(index.symbols().size(), 12u);
+	const auto region = findSymbol(SymbolCategory::Region, "RR_TEST");
+	const auto define = findSymbol(SymbolCategory::Define, "check");
+	const auto parameter = findSymbol(SymbolCategory::Parameter, "value");
+	const auto enumType = findSymbol(SymbolCategory::Enum, "Color");
+	const auto pattern = findSymbol(SymbolCategory::ExternEnumPattern, "EXT_*");
+	ASSERT_TRUE(region);
+	ASSERT_TRUE(define);
+	ASSERT_TRUE(parameter);
+	ASSERT_TRUE(enumType);
+	ASSERT_TRUE(pattern);
+	EXPECT_NE(region->id, define->id);
+	EXPECT_EQ(parameter->container, define->id);
+	EXPECT_EQ(define->signature, "define check");
+	EXPECT_EQ(enumType->type, Type::Enum);
+	EXPECT_EQ(enumType->enumName, "Color");
+	EXPECT_EQ(pattern->provenance, SymbolProvenance::Pattern);
+	EXPECT_EQ(pattern->declaration.file, "semantic.rls");
+
+	const auto declaration = index.declaration(enumType->id);
+	ASSERT_TRUE(declaration);
+	EXPECT_EQ(declaration->displayName, "Color");
+	const auto occurrences = index.occurrencesFor(enumType->id);
+	ASSERT_EQ(occurrences.size(), 3u);
+	EXPECT_EQ(occurrences[0].kind, OccurrenceKind::TypeReference);
+	EXPECT_EQ(occurrences[1].kind, OccurrenceKind::TypeReference);
+	EXPECT_EQ(occurrences[2].kind, OccurrenceKind::Declaration);
+	EXPECT_EQ(occurrences[2].span.file, declaration->selection.file);
+	EXPECT_EQ(occurrences[2].span.start.line, declaration->selection.start.line);
+	EXPECT_EQ(occurrences[2].span.start.column, declaration->selection.start.column);
+	EXPECT_EQ(occurrences[2].span.end.line, declaration->selection.end.line);
+	EXPECT_EQ(occurrences[2].span.end.column, declaration->selection.end.column);
+}
+
+TEST(SemanticIndexTests, RecordsCallableSignatureMetadata) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"enum Color { RED }\n"
+		"define choose(color: Color = RED, enabled: Bool = true): color\n"
+		"extern define external(count: Int = 2) -> Color\n",
+		"signatures.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	const auto findCallable = [&](std::string_view name) {
+		return std::find_if(index.symbols().begin(), index.symbols().end(),
+			[&](const SymbolRecord& symbol) {
+				return (symbol.category == SymbolCategory::Define
+					|| symbol.category == SymbolCategory::ExternDefine)
+					&& symbol.displayName == name;
+			});
+	};
+	const auto choose = findCallable("choose");
+	const auto external = findCallable("external");
+	ASSERT_NE(choose, index.symbols().end());
+	ASSERT_NE(external, index.symbols().end());
+	EXPECT_EQ(choose->type, Type::Enum);
+	EXPECT_EQ(choose->enumName, "Color");
+	EXPECT_EQ(external->type, Type::Enum);
+	EXPECT_EQ(external->enumName, "Color");
+
+	std::vector<const SymbolRecord*> chooseParameters;
+	std::vector<const SymbolRecord*> externalParameters;
+	for (const auto& symbol : index.symbols()) {
+		if (symbol.category != SymbolCategory::Parameter || !symbol.container) continue;
+		if (symbol.container == choose->id) chooseParameters.push_back(&symbol);
+		if (symbol.container == external->id) externalParameters.push_back(&symbol);
+	}
+	ASSERT_EQ(chooseParameters.size(), 2u);
+	EXPECT_EQ(chooseParameters[0]->defaultValue, "RED");
+	EXPECT_TRUE(chooseParameters[0]->optional);
+	EXPECT_EQ(chooseParameters[1]->defaultValue, "true");
+	EXPECT_TRUE(chooseParameters[1]->optional);
+	ASSERT_EQ(externalParameters.size(), 1u);
+	EXPECT_EQ(externalParameters[0]->defaultValue, "2");
+	EXPECT_TRUE(externalParameters[0]->optional);
+}
+
+TEST(SemanticIndexTests, RecordsRegionExtensionTargetRelations) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"region RR_BASE { name: \"Base\" }\n"
+		"extend region RR_BASE { events { EVENT_BASE: true } }\n"
+		"extend region RR_UNKNOWN { events { EVENT_UNKNOWN: true } }\n",
+		"extensions.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	std::optional<SymbolRecord> base;
+	std::vector<SymbolRecord> extensions;
+	for (const auto& symbol : index.symbols()) {
+		if (symbol.category == SymbolCategory::Region && symbol.displayName == "RR_BASE") base = symbol;
+		if (symbol.category == SymbolCategory::RegionExtension) extensions.push_back(symbol);
+	}
+	ASSERT_TRUE(base);
+	ASSERT_EQ(extensions.size(), 2u);
+	EXPECT_EQ(extensions[0].container, base->id);
+	EXPECT_FALSE(extensions[1].container);
+
+	const auto validTarget = index.occurrenceAt("extensions.rls", {2, 15});
+	ASSERT_TRUE(validTarget);
+	EXPECT_EQ(validTarget->kind, OccurrenceKind::ExtensionTarget);
+	EXPECT_EQ(validTarget->symbol, base->id);
+	const auto unknownTarget = index.occurrenceAt("extensions.rls", {3, 15});
+	ASSERT_TRUE(unknownTarget);
+	EXPECT_EQ(unknownTarget->kind, OccurrenceKind::Unresolved);
+	EXPECT_FALSE(unknownTarget->symbol);
+}
+
+TEST(SemanticIndexTests, RecordsDuplicateDeclarationDiagnostics) {
+	SemanticIndex index;
+	{
+		Project project;
+		project.files.push_back(rls::parser::ParseString(
+			"region RR_DUP { name: \"First\" }\n", "first.rls"));
+		project.files.push_back(rls::parser::ParseString(
+			"region RR_DUP { name: \"Second\" }\n", "second.rls"));
+		analyze(project);
+		index = buildSemanticIndex(project);
+	}
+
+	ASSERT_EQ(index.diagnostics().size(), 1u);
+	const auto& diagnostic = index.diagnostics()[0];
+	EXPECT_EQ(diagnostic.code, "RLS-S001");
+	EXPECT_EQ(diagnostic.level, DiagnosticLevel::Error);
+	EXPECT_EQ(diagnostic.message, "duplicate region 'RR_DUP'");
+	EXPECT_EQ(diagnostic.span.file, "second.rls");
+	ASSERT_EQ(diagnostic.related.size(), 1u);
+	EXPECT_EQ(diagnostic.related[0].message, "first declaration");
+	EXPECT_EQ(diagnostic.related[0].span.file, "first.rls");
+}
+
+TEST(SemanticIndexTests, SeparatesParameterScopesAndKeepsUnknownOccurrences) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"define first(value: Bool): value\n"
+		"define second(value: Bool): value and unknown\n",
+		"scopes.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	std::optional<SymbolId> first;
+	std::optional<SymbolId> second;
+	std::vector<SymbolRecord> parameters;
+	for (const auto& symbol : index.symbols()) {
+		if (symbol.category == SymbolCategory::Define && symbol.displayName == "first") first = symbol.id;
+		if (symbol.category == SymbolCategory::Define && symbol.displayName == "second") second = symbol.id;
+		if (symbol.category == SymbolCategory::Parameter && symbol.displayName == "value") parameters.push_back(symbol);
+	}
+	ASSERT_TRUE(first);
+	ASSERT_TRUE(second);
+	ASSERT_EQ(parameters.size(), 2u);
+	const auto firstParameter = parameters[0].container == first ? parameters[0] : parameters[1];
+	const auto secondParameter = parameters[0].container == second ? parameters[0] : parameters[1];
+	EXPECT_EQ(firstParameter.container, first);
+	EXPECT_EQ(secondParameter.container, second);
+
+	const auto firstOccurrences = index.occurrencesFor(firstParameter.id);
+	const auto secondOccurrences = index.occurrencesFor(secondParameter.id);
+	ASSERT_EQ(firstOccurrences.size(), 2u);
+	ASSERT_EQ(secondOccurrences.size(), 2u);
+	EXPECT_EQ(firstOccurrences[1].kind, OccurrenceKind::Reference);
+	EXPECT_EQ(secondOccurrences[1].kind, OccurrenceKind::Reference);
+	const auto firstUse = index.occurrenceAt("scopes.rls", {1, 28});
+	ASSERT_TRUE(firstUse);
+	EXPECT_EQ(firstUse->symbol, firstParameter.id);
+	const auto secondUse = index.occurrenceAt("scopes.rls", {2, 29});
+	ASSERT_TRUE(secondUse);
+	EXPECT_EQ(secondUse->symbol, secondParameter.id);
+	const auto unknown = index.occurrenceAt("scopes.rls", {2, 39});
+	ASSERT_TRUE(unknown);
+	EXPECT_EQ(unknown->kind, OccurrenceKind::Unresolved);
+	EXPECT_FALSE(unknown->symbol);
+}
+
+TEST(SemanticIndexTests, CapturesCrossFileExternsAndAmbiguousEnumValues) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString("extern define host() -> Bool\n", "host.rls"));
+	project.files.push_back(rls::parser::ParseString("enum Alpha { SHARED }\n", "alpha.rls"));
+	project.files.push_back(rls::parser::ParseString("enum Beta { SHARED }\n", "beta.rls"));
+	project.files.push_back(rls::parser::ParseString(
+		"define call(): host()\n"
+		"define ambiguous(): SHARED\n", "use.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	std::optional<SymbolRecord> host;
+	for (const auto& symbol : index.symbols()) {
+		if (symbol.category == SymbolCategory::ExternDefine && symbol.displayName == "host") host = symbol;
+	}
+	ASSERT_TRUE(host);
+	EXPECT_EQ(host->provenance, SymbolProvenance::Extern);
+	const auto hostCall = index.occurrenceAt("use.rls", {1, 16});
+	ASSERT_TRUE(hostCall);
+	EXPECT_EQ(hostCall->kind, OccurrenceKind::Call);
+	EXPECT_EQ(hostCall->symbol, host->id);
+	const auto ambiguous = index.occurrenceAt("use.rls", {2, 21});
+	ASSERT_TRUE(ambiguous);
+	EXPECT_EQ(ambiguous->kind, OccurrenceKind::Unresolved);
+	EXPECT_FALSE(ambiguous->symbol);
+}
+
+TEST(SemanticIndexTests, RecordsConcreteValuesObservedThroughExternPatterns) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"extern enum Item { RG_EXPLICIT, RG_* }\n"
+		"define first(): RG_HOOKSHOT\n"
+		"define repeated(): RG_HOOKSHOT\n"
+		"define qualified(): Item.RG_BOW\n"
+		"define explicit(): RG_EXPLICIT\n",
+		"observed-enum-values.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	ASSERT_EQ(index.observedEnumValues().size(), 2u);
+	EXPECT_EQ(index.observedEnumValues()[0].enumName, "Item");
+	EXPECT_EQ(index.observedEnumValues()[0].displayName, "RG_BOW");
+	EXPECT_EQ(index.observedEnumValues()[1].enumName, "Item");
+	EXPECT_EQ(index.observedEnumValues()[1].displayName, "RG_HOOKSHOT");
+
+	const auto bare = index.occurrenceAt("observed-enum-values.rls", {2, 18});
+	ASSERT_TRUE(bare);
+	ASSERT_TRUE(bare->symbol);
+	const auto barePattern = index.declaration(*bare->symbol);
+	ASSERT_TRUE(barePattern);
+	EXPECT_EQ(barePattern->category, SymbolCategory::ExternEnumPattern);
+	EXPECT_EQ(barePattern->displayName, "RG_*");
+	EXPECT_EQ(bare->kind, OccurrenceKind::Reference);
+
+	const auto qualified = index.occurrenceAt(
+		"observed-enum-values.rls", {4, 27});
+	ASSERT_TRUE(qualified);
+	ASSERT_TRUE(qualified->symbol);
+	EXPECT_EQ(qualified->symbol, bare->symbol);
+	EXPECT_EQ(qualified->kind, OccurrenceKind::MemberAccess);
+}
+
+TEST(SemanticIndexTests, LeavesOverlappingExternPatternsUnresolved) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"extern enum Item { RG_*, *_HOOKSHOT }\n"
+		"define use(): RG_HOOKSHOT\n",
+		"ambiguous-pattern.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	const auto occurrence = index.occurrenceAt("ambiguous-pattern.rls", {2, 16});
+	ASSERT_TRUE(occurrence);
+	EXPECT_EQ(occurrence->kind, OccurrenceKind::Unresolved);
+	EXPECT_FALSE(occurrence->symbol);
+}
+
+TEST(SemanticIndexTests, RecordsOperatorAndTernaryExpectedTypes) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"define check(flag: Bool, count: Int): flag ? count + 1 : count\n",
+		"expected.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	const auto condition = index.expectedTypeAt("expected.rls", {1, 39});
+	ASSERT_TRUE(condition);
+	EXPECT_EQ(condition->type, Type::Bool);
+	const auto arithmeticParameter = index.expectedTypeAt("expected.rls", {1, 46});
+	ASSERT_TRUE(arithmeticParameter);
+	EXPECT_EQ(arithmeticParameter->type, Type::Int);
+	const auto arithmeticLiteral = index.expectedTypeAt("expected.rls", {1, 54});
+	ASSERT_TRUE(arithmeticLiteral);
+	EXPECT_EQ(arithmeticLiteral->type, Type::Int);
+}
+
+TEST(SemanticIndexTests, CopiesResolvedTypesCallsAndMemberOccurrences) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"enum Color { RED }\n"
+		"define identity(value: Color): value\n"
+		"define check(): identity(RED)\n",
+		"calls.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	auto findSymbol = [&](SymbolCategory category, std::string_view displayName) {
+		for (const auto& symbol : index.symbols()) {
+			if (symbol.category == category && symbol.displayName == displayName) {
+				return std::optional<SymbolRecord>(symbol);
+			}
+		}
+		return std::optional<SymbolRecord>{};
+	};
+
+	const auto identity = findSymbol(SymbolCategory::Define, "identity");
+	const auto value = findSymbol(SymbolCategory::Parameter, "value");
+	const auto color = findSymbol(SymbolCategory::Enum, "Color");
+	const auto red = findSymbol(SymbolCategory::EnumMember, "RED");
+	ASSERT_TRUE(identity);
+	ASSERT_TRUE(value);
+	ASSERT_TRUE(color);
+	ASSERT_TRUE(red);
+	ASSERT_EQ(index.calls().size(), 1u);
+	const auto& call = index.calls()[0];
+	EXPECT_EQ(call.target, identity->id);
+	ASSERT_EQ(call.argumentRanges.size(), 1u);
+	ASSERT_EQ(call.normalizedBindings.size(), 1u);
+	EXPECT_EQ(call.normalizedBindings[0], 0u);
+	const auto callAt = index.callAt("calls.rls", {3, 17});
+	ASSERT_TRUE(callAt);
+	EXPECT_EQ(callAt->target, identity->id);
+	const auto occurrenceAt = index.occurrenceAt("calls.rls", {3, 17});
+	ASSERT_TRUE(occurrenceAt);
+	EXPECT_EQ(occurrenceAt->symbol, identity->id);
+	EXPECT_EQ(occurrenceAt->kind, OccurrenceKind::Call);
+	const auto typeAt = index.typeAt("calls.rls", {3, 26});
+	ASSERT_TRUE(typeAt);
+	EXPECT_EQ(typeAt->type, Type::Enum);
+	EXPECT_EQ(typeAt->enumName, "Color");
+	const auto expectedTypeAt = index.expectedTypeAt("calls.rls", {3, 26});
+	ASSERT_TRUE(expectedTypeAt);
+	EXPECT_EQ(expectedTypeAt->type, Type::Enum);
+	EXPECT_EQ(expectedTypeAt->enumName, "Color");
+	const auto typeReference = index.occurrenceAt("calls.rls", {2, 24});
+	ASSERT_TRUE(typeReference);
+	EXPECT_EQ(typeReference->kind, OccurrenceKind::TypeReference);
+	EXPECT_EQ(typeReference->symbol, color->id);
+
+	ASSERT_FALSE(index.types().empty());
+	EXPECT_TRUE(std::any_of(index.types().begin(), index.types().end(), [](const TypeRecord& record) {
+		return record.type == Type::Enum && record.enumName == "Color";
+	}));
+	const auto memberOccurrences = index.occurrencesFor(red->id);
+	ASSERT_EQ(memberOccurrences.size(), 2u);
+	EXPECT_EQ(memberOccurrences[0].kind, OccurrenceKind::Declaration);
+	EXPECT_EQ(memberOccurrences[1].kind, OccurrenceKind::Reference);
+	EXPECT_LT(memberOccurrences[0].span.start.line, memberOccurrences[1].span.start.line);
+
+	const auto visibleInIdentity = index.visibleSymbolsAt("calls.rls", {2, 17});
+	EXPECT_TRUE(std::find(visibleInIdentity.begin(), visibleInIdentity.end(), identity->id) != visibleInIdentity.end());
+	EXPECT_TRUE(std::find(visibleInIdentity.begin(), visibleInIdentity.end(), value->id) != visibleInIdentity.end());
+	const auto visibleInCheck = index.visibleSymbolsAt("calls.rls", {3, 17});
+	EXPECT_TRUE(std::find(visibleInCheck.begin(), visibleInCheck.end(), identity->id) != visibleInCheck.end());
+	EXPECT_TRUE(std::find(visibleInCheck.begin(), visibleInCheck.end(), value->id) == visibleInCheck.end());
+}
+
+TEST(SemanticIndexTests, TypesAndLinksDeclaredDomainValues) {
+	Project project;
+	project.files.push_back(rls::parser::ParseString(
+		"region RR_TARGET {\n"
+		"  events { EVENT_OPEN: true }\n"
+		"  locations { RC_CHEST: true }\n"
+		"}\n"
+		"define region_value(): RR_TARGET\n"
+		"define event_value(): EVENT_OPEN\n"
+		"define location_value(): RC_CHEST\n",
+		"domain-values.rls"));
+	analyze(project);
+	const auto index = buildSemanticIndex(project);
+
+	const auto find = [&](SymbolCategory category, std::string_view name) {
+		return std::find_if(index.symbols().begin(), index.symbols().end(),
+			[&](const SymbolRecord& symbol) {
+				return symbol.category == category && symbol.displayName == name;
+			});
+	};
+	const auto region = find(SymbolCategory::Region, "RR_TARGET");
+	const auto event = find(SymbolCategory::SectionEntry, "EVENT_OPEN");
+	const auto location = find(SymbolCategory::SectionEntry, "RC_CHEST");
+	ASSERT_NE(region, index.symbols().end());
+	ASSERT_NE(event, index.symbols().end());
+	ASSERT_NE(location, index.symbols().end());
+	EXPECT_EQ(region->type, Type::Region);
+	EXPECT_EQ(event->type, Type::Event);
+	EXPECT_EQ(location->type, Type::Location);
+
+	const auto regionUse = index.occurrenceAt("domain-values.rls", {5, 25});
+	const auto eventUse = index.occurrenceAt("domain-values.rls", {6, 24});
+	const auto locationUse = index.occurrenceAt("domain-values.rls", {7, 27});
+	ASSERT_TRUE(regionUse && eventUse && locationUse);
+	EXPECT_EQ(regionUse->symbol, region->id);
+	EXPECT_EQ(eventUse->symbol, event->id);
+	EXPECT_EQ(locationUse->symbol, location->id);
+
+	const auto visible = index.visibleSymbolsAt("domain-values.rls", {5, 25});
+	EXPECT_NE(std::find(visible.begin(), visible.end(), region->id), visible.end());
+	EXPECT_NE(std::find(visible.begin(), visible.end(), event->id), visible.end());
+	EXPECT_NE(std::find(visible.begin(), visible.end(), location->id), visible.end());
 }
 
 // == Empty project ============================================================

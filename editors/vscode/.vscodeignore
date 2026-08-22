@@ -1,0 +1,10 @@
+.vscode/**
+src/**
+test-fixture/**
+out/**
+scripts/**
+node_modules/**
+package-lock.json
+tsconfig.json
+**/*.map
+**/*.ts

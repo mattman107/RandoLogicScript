@@ -1,0 +1,12 @@
+{
+    "version": 1,
+    "sources": ["src"],
+    "transpilers": {
+        "soh": {
+            "output": "out_soh/"
+        },
+        "soh_ap": {
+            "output": "out_soh_ap/"
+        }
+    }
+}

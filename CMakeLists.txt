@@ -1,7 +1,22 @@
 cmake_minimum_required(VERSION 3.14)
 
+if(POLICY CMP0091)
+	cmake_policy(SET CMP0091 NEW)
+endif()
+
 project(RandoLogicScript)
 set(CMAKE_CXX_STANDARD 20)
+
+add_library(rls_build_options INTERFACE)
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+	target_compile_options(rls_build_options INTERFACE -fexperimental-library)
+	target_link_options(rls_build_options INTERFACE -fexperimental-library)
+endif()
+
+option(RLS_STATIC_MSVC_RUNTIME "Link the MSVC runtime statically" OFF)
+if(MSVC AND RLS_STATIC_MSVC_RUNTIME)
+	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 include(CTest)
 include(FetchContent)
@@ -29,4 +44,6 @@ add_subdirectory(ast)
 add_subdirectory(parser)
 add_subdirectory(sema)
 add_subdirectory(transpilers)
+add_subdirectory(project)
 add_subdirectory(console)
+add_subdirectory(lsp)

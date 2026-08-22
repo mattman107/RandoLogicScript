@@ -40,11 +40,41 @@ using selector = tao::pegtl::parse_tree::selector<
 		grammar::string_literal,
 		grammar::atom_keyword,
 		grammar::invoke_suffix,
-		grammar::type,
+		grammar::kw_and,
+		grammar::kw_or,
+		grammar::parameter_type_name,
+		grammar::return_type_name,
+		grammar::enum_name,
+		grammar::member_object,
+		grammar::member_name,
+		grammar::call_callee,
+		grammar::named_argument_label,
+		grammar::entry_label,
+		grammar::region_data_key,
+		grammar::region_name,
 		grammar::comp_op,
 		grammar::mul_div_op,
 		grammar::add_sub_op,
 		grammar::section_kind,
+		grammar::section,
+		grammar::region_decl,
+		grammar::extend_decl,
+		grammar::define_decl,
+		grammar::extern_define_decl,
+		grammar::enum_decl,
+		grammar::extern_enum_decl,
+		grammar::enum_member,
+		grammar::extern_enum_entry,
+		grammar::region_data_entry,
+		grammar::entry,
+		grammar::invoke_call,
+		grammar::call,
+		grammar::member_access,
+		grammar::named_arg,
+		grammar::match_expr,
+		grammar::match_arm,
+		grammar::match_pattern,
+		grammar::list_expr,
 		grammar::kw_not,       // marker: unary "not"
 		grammar::kw_here,      // `here` keyword atom (resolves to current region)
 		grammar::trailing_or   // marker: fallthrough in match arms
@@ -54,31 +84,8 @@ using selector = tao::pegtl::parse_tree::selector<
 	tao::pegtl::parse_tree::remove_content::on<
 		// File root
 		grammar::rls_file,
-		// Top-level declarations
-		grammar::region_decl,
-		grammar::extend_decl,
-		grammar::define_decl,
-		grammar::extern_define_decl,
-		grammar::enum_decl,
-		grammar::extern_enum_decl,
-		grammar::enum_member,
-		grammar::extern_enum_entry,
-		// Region data
-		grammar::region_data_entry,
-		// Sections & entries
-		grammar::section,
-		grammar::entry,
 		// Parameters
-		grammar::param,
-		// Expressions
-		grammar::invoke_call,
-		grammar::call,
-		grammar::member_access,
-		grammar::named_arg,
-		grammar::match_expr,
-		grammar::match_arm,
-		grammar::match_pattern,
-		grammar::list_expr
+		grammar::param
 	>,
 
 	// -- Transparent wrappers (fold when single child) ------------------------

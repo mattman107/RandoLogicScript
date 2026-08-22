@@ -59,6 +59,11 @@ constexpr EnumClassMapping kEnumClasses[] = {
 	{"Setting",    "RandomizerSettingKey"},
 	{"Region",     "Regions"},
 	{"Check",      "Locations"},
+	// Events and locations declared in RLS itself resolve to the pseudo-enums "Event" and
+	// "Location" (see IdentifierKind::DeclaredValue), which land in the same world classes
+	// as the extern Logic/Check enums.
+	{"Event",      "Events"},
+	{"Location",   "Locations"},
 	{"Trial",      "TrialKey"},
 };
 

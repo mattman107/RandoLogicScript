@@ -190,6 +190,19 @@ std::string ApTranspiler::GenerateExpression(const rls::ast::Identifier& node) c
 		return renderEnumValue(*enumName, node.name.text);
 	} else if (node.kind == rls::ast::IdentifierKind::Parameter) {
 		return node.name.text;
+	} else if (node.kind == rls::ast::IdentifierKind::DeclaredValue) {
+		// A region/event/location declared in RLS itself: sema resolved the kind, but the
+		// enum it belongs to is implied by which decl table holds it.
+		if (project.RegionDecls.contains(node.name.text)) {
+			return renderEnumValue("Region", node.name.text);
+		}
+		if (project.EventDecls.contains(node.name.text)) {
+			return renderEnumValue("Event", node.name.text);
+		}
+		if (project.LocationDecls.contains(node.name.text)) {
+			return renderEnumValue("Location", node.name.text);
+		}
+		return "";
 	} else if (node.kind == rls::ast::IdentifierKind::FunctionRef) {
 		// Bare reference to a function used as a callable value: emit the name.
 		return node.name.text;

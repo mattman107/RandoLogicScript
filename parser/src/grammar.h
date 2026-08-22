@@ -50,8 +50,10 @@
 //
 // ── Error handling ───────────────────────────────────────────────────────────
 //
-//   must<A, B, C>         Like seq, but if any rule fails AFTER the first one,
-//                          it throws a `parse_error` instead of backtracking.
+//   required<A, B, C>     Like must<> in strict mode. In editor mode, missing
+//                          rules succeed without consuming input so the same
+//                          grammar can retain surrounding syntax.
+//   must<A, B>            Used by grammar unit tests to require a full match.
 //                          We use `must<Rule, eof>` in tests to assert a rule
 //                          matches the ENTIRE input string.
 //
@@ -81,10 +83,86 @@
 // =============================================================================
 
 #include <tao/pegtl.hpp>
+#include <tao/pegtl/contrib/analyze_traits.hpp>
+
+#include <type_traits>
 
 namespace rls::parser::grammar {
 
 using namespace tao::pegtl;
+
+struct ParseState {
+	bool tolerant = false;
+};
+
+template<typename... States>
+bool isTolerant(States&&... states) {
+	bool result = false;
+	([&] {
+		if constexpr (std::is_same_v<
+			std::remove_cvref_t<States>, ParseState>) {
+			result = result || states.tolerant;
+		}
+	}(), ...);
+	return result;
+}
+
+template<typename Rule>
+struct required_rule {
+	using rule_t = required_rule;
+	using subs_t = type_list<Rule>;
+
+	template<apply_mode ActionMode, rewind_mode,
+		template<typename...> class Action,
+		template<typename...> class Control,
+		typename ParseInput, typename... States>
+	static bool match(ParseInput& input, States&&... states) {
+		if (Control<Rule>::template match<
+			ActionMode, rewind_mode::dontcare, Action, Control>(
+				input, states...)) {
+			return true;
+		}
+		if (isTolerant(states...)) return true;
+		Control<Rule>::raise(
+			static_cast<const ParseInput&>(input), states...);
+		return true;
+	}
+};
+
+template<typename... Rules>
+struct required : seq<required_rule<Rules>...> {};
+
+template<typename Rule>
+struct recoverable {
+	using rule_t = recoverable;
+	using subs_t = type_list<Rule>;
+
+	template<apply_mode ActionMode, rewind_mode,
+		template<typename...> class Action,
+		template<typename...> class Control,
+		typename ParseInput, typename... States>
+	static bool match(ParseInput& input, States&&... states) {
+		if (Control<Rule>::template match<
+			ActionMode, rewind_mode::dontcare, Action, Control>(
+				input, states...)) {
+			return true;
+		}
+		return isTolerant(states...);
+	}
+};
+
+struct tolerant_mode {
+	using rule_t = tolerant_mode;
+	using subs_t = type_list<>;
+
+	template<apply_mode, rewind_mode,
+		template<typename...> class Action,
+		template<typename...> class Control,
+		typename ParseInput, typename... States>
+	static bool match(ParseInput&, States&&... states) {
+		return isTolerant(states...);
+	}
+};
 
 // == Keywords =================================================================
 
@@ -191,7 +269,12 @@ struct integer : seq<opt<one<'-'>>, plus<digit>> {};
 /// String literal: `"..."` with `\"` and `\\` escape support.
 struct escaped_char : seq<one<'\\'>, one<'"', '\\'>> {};
 struct string_char  : sor<escaped_char, not_one<'"', '\\'>> {};
-struct string_literal : seq<one<'"'>, star<string_char>, must<one<'"'>>> {};
+struct string_literal : seq<one<'"'>, star<string_char>, required<one<'"'>>> {};
+
+struct recover_source : seq<
+	tolerant_mode,
+	sor<line_comment, string_literal, any>
+> {};
 
 // == Punctuation ==============================================================
 
@@ -253,7 +336,11 @@ struct atom_keyword : sor<
 struct atom : sor<atom_keyword, string_literal, ident, integer> {};
 
 /// Named argument:  IDENT ":" expr
-struct named_arg : seq<ident, _, colon, _, expr> {};
+struct named_argument_label : ident {};
+struct named_argument_delimiter : colon {};
+struct named_arg : seq<
+	named_argument_label, _, named_argument_delimiter, _, recoverable<expr>
+> {};
 
 /// A single call argument — named (IDENT ":" expr) or positional (expr).
 /// We try `named_arg` first because it starts with `ident` which would also
@@ -261,14 +348,29 @@ struct named_arg : seq<ident, _, colon, _, expr> {};
 struct arg : sor<named_arg, expr> {};
 
 /// Argument list (possibly empty) between parentheses.
-struct arg_list : opt<list<arg, seq<_, comma, _>>> {};
+struct call_argument_separator : comma {};
+struct arg_list : opt<seq<
+	arg,
+	star<seq<_, call_argument_separator, _, recoverable<arg>>>
+>> {};
 
 /// Function call:  IDENT "(" arg_list ")"
-struct call : seq<ident, _, open_paren, must<_, arg_list, _, close_paren>> {};
+struct call_callee : ident {};
+struct call_open_paren : open_paren {};
+struct call_close_paren : close_paren {};
+struct call : seq<
+	call_callee, _, call_open_paren,
+	required<_, arg_list, _, call_close_paren>
+> {};
 
 /// Member access: IDENT "." IDENT  (enum type disambiguation)
 /// Example: Item.RG_HOOKSHOT
-struct member_access : seq<ident, dot, ident> {};
+struct member_object : ident {};
+struct member_delimiter : dot {};
+struct member_name : ident {};
+struct member_access : seq<
+	member_object, member_delimiter, recoverable<member_name>
+> {};
 
 /// Invoke-call suffix for callable evaluation: "()".
 struct invoke_suffix : seq<open_paren, _, close_paren> {};
@@ -293,7 +395,7 @@ struct invoke_call : seq<call, plus<seq<_, invoke_suffix>>> {};
 struct match_expr;
 
 /// Parenthesised expression: "(" expr ")"
-struct paren_expr : seq<open_paren, must<_, expr, _, close_paren>> {};
+struct paren_expr : seq<open_paren, required<_, expr, _, close_paren>> {};
 
 /// primary = invoke_call | call | member_access | match_expr | list | atom | "(" expr ")"
 ///
@@ -336,7 +438,7 @@ struct and_expr : seq<comparison, star<seq<_, kw<kw_and>, _, comparison>>> {};
 struct or_expr : seq<and_expr, star<seq<_, kw<kw_or>, _, and_expr>>> {};
 
 /// ternary = or_expr ("?" ternary ":" ternary)?
-struct ternary : seq<or_expr, opt<seq<_, question_mark, must<_, ternary, _, colon, _, ternary>>>> {};
+struct ternary : seq<or_expr, opt<seq<_, question_mark, required<_, ternary, _, colon, _, ternary>>>> {};
 
 /// expr = ternary
 struct expr : ternary {};
@@ -371,17 +473,17 @@ struct match_or_expr : seq<and_expr, star<seq<_, match_or_op, _, and_expr>>> {};
 /// The ternary ? : branches use the REGULAR ternary rule because the ? :
 /// delimiters scope the expression, and ternary-with-trailing-or in match
 /// arms is an extremely unlikely edge case.
-struct match_ternary : seq<match_or_expr, opt<seq<_, question_mark, must<_, ternary, _, colon, _, ternary>>>> {};
+struct match_ternary : seq<match_or_expr, opt<seq<_, question_mark, required<_, ternary, _, colon, _, ternary>>>> {};
 
 /// match_arm = match_pattern ":" match_ternary trailing_or?
-struct match_arm : seq<match_pattern, must<_, colon, _, match_ternary>, _, opt<trailing_or>> {};
+struct match_arm : seq<match_pattern, required<_, colon, _, match_ternary>, _, opt<trailing_or>> {};
 
 /// Detects a dangling 'or' after the last match arm (gives a clear error).
 struct no_trailing_or : not_at<kw<kw_or>> {};
 
 /// match_expr = "match" IDENT "{" match_arm+ "}"
 struct match_expr : seq<
-	kw<kw_match>, must<_, ident, _,
+	kw<kw_match>, required<_, ident, _,
 	open_brace, _,
 	plus<seq<match_arm, _>>,
 	no_trailing_or,
@@ -399,7 +501,16 @@ struct type : ident {};
 struct ident_list : list<ident, seq<_, comma, _>> {};
 
 /// param = IDENT (":" type)? ("=" expr)?
-struct param : seq<ident, opt<seq<_, colon, _, type>>, opt<seq<_, one<'='>, _, expr>>> {};
+struct parameter_type_delimiter : colon {};
+struct parameter_type_name : type {};
+struct parameter_type_annotation : seq<
+	parameter_type_delimiter, _, parameter_type_name
+> {};
+struct param : seq<
+	ident,
+	opt<seq<_, parameter_type_annotation>>,
+	opt<seq<_, one<'='>, _, expr>>
+> {};
 
 /// params = param ("," param)*
 struct params : list<param, seq<_, comma, _>> {};
@@ -407,49 +518,82 @@ struct params : list<param, seq<_, comma, _>> {};
 // -- Sections (events / locations / exits) ------------------------------------
 
 /// entry = IDENT ":" expr
-struct entry : seq<ident, must<_, colon, _, expr>> {};
+struct entry_label : ident {};
+struct entry_delimiter : colon {};
+struct entry : seq<
+	entry_label, required<_, entry_delimiter, _, expr>
+> {};
 
 /// section_kind = "events" | "locations" | "exits"
 struct section_kind : sor<kw<kw_events>, kw<kw_locations>, kw<kw_exits>> {};
 
 /// section = section_kind "{" entry* "}"
-struct section : seq<section_kind, must<_, open_brace, _, star<seq<entry, _>>, close_brace>> {};
+struct section_open_brace : open_brace {};
+struct section_close_brace : close_brace {};
+struct section : seq<
+	section_kind,
+	required<_, section_open_brace, _, star<seq<entry, _>>, section_close_brace>
+> {};
 
 // -- Region -------------------------------------------------------------------
 
 /// region_data_entry = IDENT ":" expr
-struct region_data_entry : seq<ident, must<_, colon, _, expr>> {};
+struct region_data_key : ident {};
+struct region_data_delimiter : colon {};
+struct region_data_entry : seq<
+	region_data_key, required<_, region_data_delimiter, _, expr>
+> {};
 
 /// region_body = region_data_entry* section*
 struct region_body : seq<star<seq<region_data_entry, _>>, star<seq<section, _>>> {};
 
+struct declaration_keyword : sor<
+	kw<kw_region>, kw<kw_extend>, kw<kw_extern>, kw<kw_define>, kw<kw_enum>
+> {};
+struct region_recovery_character : seq<
+	tolerant_mode,
+	not_at<sor<close_brace, declaration_keyword>>,
+	any
+> {};
+struct region_recovery : star<region_recovery_character> {};
+
 /// region = "region" IDENT "{" region_body "}"
-struct region_decl : seq<kw<kw_region>, must<_, ident, _, open_brace, _, region_body, _, close_brace>> {};
+struct region_name : ident {};
+struct region_open_brace : open_brace {};
+struct region_close_brace : close_brace {};
+struct region_decl : seq<
+	kw<kw_region>, required<_, region_name, _, region_open_brace, _,
+	region_body, region_recovery, _, region_close_brace>
+> {};
 
 // -- Extend region ------------------------------------------------------------
 
 /// extend = "extend" "region" IDENT "{" section* "}"
 struct extend_decl : seq<
-	kw<kw_extend>, must<_, kw<kw_region>, _, ident, _,
-	open_brace, _,
+	kw<kw_extend>, required<_, kw<kw_region>, _, region_name, _,
+	region_open_brace, _,
 	star<seq<section, _>>,
-	close_brace>
+	region_recovery,
+	region_close_brace>
 > {};
 
 // -- Define -------------------------------------------------------------------
 
 /// define = "define" IDENT "(" params? ")" ":" expr
 struct define_decl : seq<
-	kw<kw_define>, must<_, ident, _,
+	kw<kw_define>, required<_, ident, _,
 	open_paren, _, opt<params>, _, close_paren, _,
 	colon, _, expr>
 > {};
 
+struct return_type_delimiter : arrow {};
+struct return_type_name : type {};
+
 /// extern define = "extern" "define" IDENT "(" params? ")" "->" type
 struct extern_define_decl : seq<
-	kw<kw_extern>, _, kw<kw_define>, must<_, ident, _,
+	kw<kw_extern>, _, kw<kw_define>, required<_, ident, _,
 	open_paren, _, opt<params>, _, close_paren, _,
-	arrow, _, type>
+	return_type_delimiter, _, return_type_name>
 > {};
 
 /// enum_member = IDENT ("=" INTEGER)?
@@ -464,8 +608,10 @@ struct glob_pattern : seq<star<glob_char>, one<'*'>, star<sor<glob_char, one<'*'
 struct extern_enum_entry : sor<glob_pattern, enum_member> {};
 
 /// enum = "enum" IDENT "{" enum_member ("," enum_member)* "}"
+struct enum_name : ident {};
+struct enum_head : seq<kw<kw_enum>, required<_, enum_name>> {};
 struct enum_decl : seq<
-	kw<kw_enum>, must<_, ident, _,
+	enum_head, required<_,
 	open_brace, _,
 	opt<list<enum_member, seq<_, comma, _>>>, _,
 	close_brace>
@@ -473,7 +619,7 @@ struct enum_decl : seq<
 
 /// extern enum = "extern" "enum" IDENT "{" extern_enum_entry ("," extern_enum_entry)* "}"
 struct extern_enum_decl : seq<
-	kw<kw_extern>, _, kw<kw_enum>, must<_, ident, _,
+	kw<kw_extern>, _, enum_head, required<_,
 	open_brace, _,
 	opt<list<extern_enum_entry, seq<_, comma, _>>>, _,
 	close_brace>
@@ -493,6 +639,27 @@ struct declaration : sor<
 
 /// file = _ (declaration _)* eof
 /// Named `rls_file` to avoid clashing with any PEGTL or std types.
-struct rls_file : seq<_, star<seq<declaration, _>>, must<tao::pegtl::eof>> {};
+struct rls_file : seq<
+	_,
+	star<seq<sor<declaration, recover_source>, _>>,
+	required<tao::pegtl::eof>
+> {};
 
 } // namespace rls::parser::grammar
+
+namespace tao::pegtl {
+
+template<typename Name, typename Rule>
+struct analyze_traits<
+	Name, rls::parser::grammar::required_rule<Rule>>
+	: analyze_opt_traits<Rule> {};
+
+template<typename Name, typename Rule>
+struct analyze_traits<Name, rls::parser::grammar::recoverable<Rule>>
+	: analyze_opt_traits<Rule> {};
+
+template<typename Name>
+struct analyze_traits<Name, rls::parser::grammar::tolerant_mode>
+	: analyze_opt_traits<> {};
+
+} // namespace tao::pegtl

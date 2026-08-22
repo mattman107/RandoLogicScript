@@ -1,8 +1,8 @@
 #include "validate_declarations.h"
+#include "diagnostics.h"
 #include "type_helpers.h"
 
 #include <algorithm>
-#include <format>
 #include <queue>
 #include <set>
 #include <unordered_map>
@@ -35,21 +35,13 @@ static void checkEnumDeclarations(
 			for (const auto& entry : info.entries) {
 				if (std::holds_alternative<ast::EnumPatternInfo>(entry)) {
 					const auto& pattern = std::get<ast::EnumPatternInfo>(entry);
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("enum '{}' cannot contain wildcard pattern '{}'", enumName, pattern.pattern),
-						pattern.span
-					});
+					diags.push_back(diagnostics::EnumWildcardPattern(pattern.span, enumName, pattern.pattern));
 					continue;
 				}
 
 				auto member = std::get<ast::EnumMemberInfo>(entry);
 				if (!seenNames.insert(member.name.text).second) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("duplicate enum member '{}' in enum '{}'", member.name.text, enumName),
-						member.span
-					});
+					diags.push_back(diagnostics::EnumDuplicateMember(member.span, member.name.text, enumName));
 					continue;
 				}
 
@@ -60,11 +52,7 @@ static void checkEnumDeclarations(
 				}
 
 				if (!seenValues.insert(*member.value).second) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("duplicate enum value {} in enum '{}'", *member.value, enumName),
-						member.span
-					});
+					diags.push_back(diagnostics::EnumDuplicateValue(member.span, *member.value, enumName));
 				}
 
 				nextValue = *member.value + 1;
@@ -84,11 +72,7 @@ static void checkEnumDeclarations(
 
 		// Extern enums: explicit members and wildcard patterns are allowed.
 		if (info.entries.empty()) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("extern enum '{}' must declare at least one member or wildcard pattern", enumName),
-				info.span
-			});
+			diags.push_back(diagnostics::ExternEnumEmpty(info.span, enumName));
 			continue;
 		}
 
@@ -98,11 +82,7 @@ static void checkEnumDeclarations(
 			if (std::holds_alternative<ast::EnumMemberInfo>(entry)) {
 				const auto& member = std::get<ast::EnumMemberInfo>(entry);
 				if (!explicitNames.insert(member.name.text).second) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("duplicate enum member '{}' in extern enum '{}'", member.name.text, enumName),
-						member.span
-					});
+					diags.push_back(diagnostics::ExternEnumDuplicateMember(member.span, member.name.text, enumName));
 				}
 				valueNameToEnums[member.name.text].insert(enumName);
 			} else {
@@ -118,15 +98,7 @@ static void checkEnumDeclarations(
 		for (const auto& pattern : patterns) {
 			for (const auto& explicitName : explicitNames) {
 				if (globMatches(pattern, explicitName)) {
-					diags.push_back({
-						ast::DiagnosticLevel::Warning,
-						std::format(
-							"extern enum '{}' wildcard '{}' overlaps explicit member '{}'",
-							enumName,
-							pattern,
-							explicitName),
-						info.span
-					});
+					diags.push_back(diagnostics::ExternEnumWildcardOverlap(info.span, enumName, pattern, explicitName));
 				}
 			}
 		}
@@ -146,14 +118,7 @@ static void checkEnumDeclarations(
 			first = false;
 		}
 
-		diags.push_back({
-			ast::DiagnosticLevel::Warning,
-			std::format(
-				"enum value '{}' appears in multiple enums ({}) and may require dotted disambiguation",
-				valueName,
-				enumList),
-			{}
-		});
+		diags.push_back(diagnostics::EnumValueNameCollision({}, valueName, enumList));
 	}
 }
 
@@ -164,11 +129,7 @@ static void checkExtendRegionTargets(
 	for (auto& [name, decls] : project.ExtendRegionDecls) {
 		if (!project.RegionDecls.contains(name)) {
 			for (const auto* decl : decls) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("extend region targets unknown region '{}'", name),
-					decl->span
-				});
+				diags.push_back(diagnostics::UnknownExtensionTarget(decl->span, name));
 			}
 		}
 	}
@@ -182,11 +143,7 @@ static void checkDuplicateRegionData(
 		std::unordered_set<std::string> seen;
 		for (const auto& entry : regionDecl->body.data) {
 			if (!seen.insert(entry.key.text).second) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format("duplicate data key '{}' in region '{}'", entry.key.text, regionName),
-					entry.key.span
-				});
+				diags.push_back(diagnostics::DuplicateRegionData(entry.key.span, entry.key.text, regionName));
 			}
 		}
 	}
@@ -205,12 +162,8 @@ static void checkDuplicateEntries(
 				auto& set = seen[section.kind];
 				for (const auto& entry : section.entries) {
 					if (!set.insert(entry.name.text).second) {
-						diags.push_back({
-							ast::DiagnosticLevel::Error,
-							std::format("duplicate {} '{}' in region '{}'",
-								sectionKindName(section.kind), entry.name.text, regionName),
-							entry.span
-						});
+						diags.push_back(diagnostics::DuplicateRegionEntry(
+							entry.span, sectionKindName(section.kind), entry.name.text, regionName));
 					}
 				}
 			}
@@ -238,13 +191,8 @@ static void checkEntryConditionTypes(
 				auto condType = project.getType(entry.condition.get());
 				if (!condType || *condType == ast::Type::Error) continue;
 				if (!isBoolCompatible(*condType)) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format("{} condition for '{}' in region '{}' must be Bool, got {}",
-							sectionKindName(section.kind), entry.name.text, regionName,
-							typeName(*condType)),
-						entry.span
-					});
+					diags.push_back(diagnostics::EntryConditionType(
+						entry.span, sectionKindName(section.kind), entry.name.text, regionName, typeName(*condType)));
 				}
 			}
 		}
@@ -260,7 +208,33 @@ static void checkEntryConditionTypes(
 	}
 }
 
-/// Check 4: Every region must be reachable from RR_ROOT via exits.
+/// Check 4: Every exit must target a declared region.
+static void checkExitTargets(
+	ast::Project& project, std::vector<ast::Diagnostic>& diags)
+{
+	auto check = [&](const std::vector<ast::Section>& sections) {
+		for (const auto& section : sections) {
+			if (section.kind != ast::SectionKind::Exits) continue;
+			for (const auto& entry : section.entries) {
+				if (!project.RegionDecls.contains(entry.name.text)) {
+					diags.push_back(diagnostics::ExitTargetMissingRegion(
+						entry.name.span, entry.name.text));
+				}
+			}
+		}
+	};
+
+	for (const auto& [_, decl] : project.RegionDecls) {
+		check(decl->body.sections);
+	}
+	for (const auto& [_, decls] : project.ExtendRegionDecls) {
+		for (const auto* decl : decls) {
+			check(decl->sections);
+		}
+	}
+}
+
+/// Check 5: Every region must be reachable from RR_ROOT via exits.
 static void checkRegionReachability(
 	ast::Project& project, std::vector<ast::Diagnostic>& diags)
 {
@@ -313,11 +287,7 @@ static void checkRegionReachability(
 
 	for (auto& [regionName, decl] : project.RegionDecls) {
 		if (!visited.contains(regionName)) {
-			diags.push_back({
-				ast::DiagnosticLevel::Warning,
-				std::format("region '{}' is not reachable from 'RR_ROOT'", regionName),
-				decl->span
-			});
+			diags.push_back(diagnostics::UnreachableRegion(decl->span, regionName));
 		}
 	}
 }
@@ -357,11 +327,7 @@ static void checkUnusedDefines(
 	}
 	for (auto& [name, decl] : project.DefineDecls) {
 		if (!usedFunctions.contains(name)) {
-			diags.push_back({
-				ast::DiagnosticLevel::Info,
-				std::format("'{}' is defined but never used", name),
-				decl->span
-			});
+			diags.push_back(diagnostics::UnusedDefine(decl->span, name));
 		}
 	}
 }
@@ -381,50 +347,24 @@ static void checkFunctionSignatures(
 
 		for (const auto& param : params) {
 			if (!seenNames.insert(param.name.text).second) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format(
-						"duplicate parameter '{}' in {} '{}'",
-						param.name.text, kind, name),
-					declSpan
-				});
+				diags.push_back(diagnostics::DuplicateParameter(declSpan, param.name.text, kind, name));
 			}
 
 			if (param.defaultValue) {
 				seenDefault = true;
 			} else if (seenDefault) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format(
-						"required parameter '{}' cannot follow optional parameters in {} '{}'",
-						param.name.text, kind, name),
-					declSpan
-				});
+				diags.push_back(diagnostics::RequiredAfterOptionalParameter(declSpan, param.name.text, kind, name));
 			}
 
 			if (isExtern && !param.type && !param.defaultValue) {
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format(
-						"extern define '{}' parameter '{}' must have a type annotation or a default value",
-						name,
-							param.name.text),
-					declSpan
-				});
+				diags.push_back(diagnostics::ExternParameterMissingType(declSpan, name, param.name.text));
 				continue;
 			}
 
 			if (isExtern && !param.type && param.defaultValue) {
 				auto defaultType = project.getType(param.defaultValue.get());
 				if (!defaultType || *defaultType == ast::Type::Error) {
-					diags.push_back({
-						ast::DiagnosticLevel::Error,
-						std::format(
-							"extern define '{}' parameter '{}' needs an explicit type or an inferrable default",
-							name,
-							param.name.text),
-						param.defaultValue->span
-					});
+					diags.push_back(diagnostics::ExternParameterCannotInfer(param.defaultValue->span, name, param.name.text));
 				}
 				continue;
 			}
@@ -448,10 +388,14 @@ static void checkFunctionSignatures(
 			};
 
 			bool defaultCompatible = isDefaultCompatible(*paramType, *defaultType);
+			const auto parameterEnum = *paramType == ast::Type::Enum
+				? project.getEnumType(&param) : std::optional<std::string_view>{};
+			const auto defaultEnum = *defaultType == ast::Type::Enum
+				? project.getEnumType(param.defaultValue.get()) : std::optional<std::string_view>{};
+			defaultCompatible = defaultCompatible || areDomainAndEnumCompatible(
+				*paramType, parameterEnum, *defaultType, defaultEnum);
 			if (defaultCompatible && *paramType == ast::Type::Enum
 				&& *defaultType == ast::Type::Enum) {
-				auto parameterEnum = project.getEnumType(&param);
-				auto defaultEnum = project.getEnumType(param.defaultValue.get());
 				defaultCompatible = !parameterEnum.has_value() || !defaultEnum.has_value()
 					|| *parameterEnum == *defaultEnum;
 			}
@@ -465,17 +409,10 @@ static void checkFunctionSignatures(
 					}
 					return std::string(typeName(type));
 				};
-				diags.push_back({
-					ast::DiagnosticLevel::Error,
-					std::format(
-						"default value for parameter '{}' in {} '{}' has type {}, expected {}",
-						param.name.text,
-						kind,
-						name,
-						typeDisplayName(*defaultType, param.defaultValue.get()),
-						typeDisplayName(*paramType, &param)),
-					param.defaultValue->span
-				});
+				diags.push_back(diagnostics::DefaultValueTypeMismatch(
+					param.defaultValue->span, param.name.text, kind, name,
+					typeDisplayName(*defaultType, param.defaultValue.get()),
+					typeDisplayName(*paramType, &param)));
 			}
 		}
 	};
@@ -487,23 +424,13 @@ static void checkFunctionSignatures(
 		validateParams("extern define", true, name, decl->params, decl->span);
 
 		if (!decl->returnType) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format("extern define '{}' must declare a return type", name),
-				decl->span
-			});
+			diags.push_back(diagnostics::ExternMissingReturnType(decl->span, name));
 			continue;
 		}
 
 		if (!resolveTypeAnnotation(project, decl->returnType->name.text)) {
-			diags.push_back({
-				ast::DiagnosticLevel::Error,
-				std::format(
-					"unknown return type annotation '{}' for extern define '{}'",
-					decl->returnType->name.text,
-					name),
-				decl->span
-			});
+			diags.push_back(diagnostics::ExternUnknownReturnType(
+				decl->span, decl->returnType->name.text, name));
 		}
 	}
 }
@@ -515,12 +442,45 @@ std::vector<ast::Diagnostic> validateDeclarations(ast::Project& project) {
 	checkDuplicateRegionData(project, diags);
 	checkDuplicateEntries(project, diags);
 	checkEntryConditionTypes(project, diags);
+	checkExitTargets(project, diags);
 	checkRegionReachability(project, diags);
 	checkUnusedDefines(project, diags);
 	checkFunctionSignatures(project, diags);
 	checkEnumDeclarations(project, diags);
 
 	return diags;
+}
+
+std::vector<CompilerDiagnostic> structureValidationDiagnostics(
+	const ast::Project& project,
+	const std::vector<ast::Diagnostic>& diagnostics) {
+	std::vector<CompilerDiagnostic> result;
+	for (const auto& diagnostic : diagnostics) {
+		if (!diagnostic.code.empty()) {
+			std::vector<DiagnosticRelatedLocation> related;
+			if (diagnostics::IsDuplicateRegionData(diagnostic)) {
+				for (const auto& [_, region] : project.RegionDecls) {
+					for (size_t index = 0; index < region->body.data.size(); ++index) {
+						const auto& duplicate = region->body.data[index];
+						if (duplicate.key.span.file != diagnostic.span.file ||
+							duplicate.key.span.start.line != diagnostic.span.start.line ||
+							duplicate.key.span.start.column != diagnostic.span.start.column) {
+							continue;
+						}
+						for (size_t prior = 0; prior < index; ++prior) {
+							const auto& first = region->body.data[prior];
+							if (first.key.text == duplicate.key.text) {
+								related.push_back({"first definition", first.key.span});
+								break;
+							}
+						}
+					}
+				}
+			}
+			result.push_back({diagnostic.code, diagnostic.level, diagnostic.message, diagnostic.span, std::move(related)});
+		}
+	}
+	return result;
 }
 
 } // namespace rls::sema

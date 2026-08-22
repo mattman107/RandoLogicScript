@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <ostream>
 #include <memory>
@@ -20,6 +21,185 @@ namespace rls::ast {
 struct Position {
 	uint32_t line = 0;
 	uint32_t column = 0;
+};
+
+/// A half-open range in a source file.
+struct SourceRange {
+	Position start;
+	Position end;
+};
+
+/// A 1-based UTF-16 position for external editor consumers.
+struct Utf16Position {
+	uint32_t line = 0;
+	uint32_t column = 0;
+};
+
+/// Immutable, validated UTF-8 source text.
+///
+/// Source bytes are preserved exactly, including CRLF. `Position` line and
+/// column values are 1-based; columns count UTF-8 bytes. Invalid UTF-8 is
+/// rejected by factories and edits.
+class SourceText {
+public:
+	SourceText() : lineStarts_{0} {}
+
+	static std::optional<SourceText> FromUtf8(std::string content) {
+		if (!isValidUtf8(content)) return std::nullopt;
+		return SourceText(std::move(content));
+	}
+
+	const std::string& content() const { return content_; }
+	const std::vector<size_t>& lineStarts() const { return lineStarts_; }
+
+	std::optional<size_t> byteOffsetFromUtf8Position(Position position) const {
+		if (position.line == 0 || position.column == 0 || position.line > lineStarts_.size()) {
+			return std::nullopt;
+		}
+
+		const size_t lineStart = lineStarts_[position.line - 1];
+		const size_t offset = lineStart + position.column - 1;
+		const size_t lineLimit = position.line < lineStarts_.size()
+			? lineStarts_[position.line]
+			: content_.size();
+		if (offset > lineLimit || (position.line < lineStarts_.size() && offset == lineLimit)) {
+			return std::nullopt;
+		}
+		return offset;
+	}
+
+	std::optional<Position> utf8PositionAtByteOffset(size_t offset) const {
+		if (offset > content_.size()) return std::nullopt;
+
+		size_t lineIndex = 0;
+		while (lineIndex + 1 < lineStarts_.size() && lineStarts_[lineIndex + 1] <= offset) {
+			++lineIndex;
+		}
+		return Position{
+			static_cast<uint32_t>(lineIndex + 1),
+			static_cast<uint32_t>(offset - lineStarts_[lineIndex] + 1),
+		};
+	}
+
+	std::optional<Utf16Position> utf16PositionAtByteOffset(size_t offset) const {
+		const auto utf8Position = utf8PositionAtByteOffset(offset);
+		if (!utf8Position) return std::nullopt;
+
+		const size_t lineStart = lineStarts_[utf8Position->line - 1];
+		size_t cursor = lineStart;
+		uint32_t utf16Column = 1;
+		while (cursor < offset) {
+			const size_t width = utf8CodePointWidth(static_cast<unsigned char>(content_[cursor]));
+			if (cursor + width > offset) return std::nullopt;
+			utf16Column += width == 4 ? 2 : 1;
+			cursor += width;
+		}
+		return Utf16Position{utf8Position->line, utf16Column};
+	}
+
+	std::optional<size_t> byteOffsetFromUtf16Position(Utf16Position position) const {
+		if (position.line == 0 || position.column == 0 || position.line > lineStarts_.size()) {
+			return std::nullopt;
+		}
+
+		const size_t lineStart = lineStarts_[position.line - 1];
+		const size_t lineLimit = position.line < lineStarts_.size()
+			? lineStarts_[position.line]
+			: content_.size();
+		size_t cursor = lineStart;
+		uint32_t utf16Column = 1;
+		while (cursor < lineLimit && utf16Column < position.column) {
+			const size_t width = utf8CodePointWidth(static_cast<unsigned char>(content_[cursor]));
+			const uint32_t units = width == 4 ? 2 : 1;
+			if (utf16Column + units > position.column || cursor + width > lineLimit) {
+				return std::nullopt;
+			}
+			utf16Column += units;
+			cursor += width;
+		}
+		return utf16Column == position.column ? std::optional<size_t>(cursor) : std::nullopt;
+	}
+
+	std::optional<SourceText> replaceAll(std::string replacement) const {
+		return FromUtf8(std::move(replacement));
+	}
+
+	std::optional<SourceText> replace(SourceRange range, std::string replacement) const {
+		const auto start = byteOffsetFromUtf8Position(range.start);
+		const auto end = byteOffsetFromUtf8Position(range.end);
+		if (!start || !end || *start > *end || !isValidUtf8(replacement)) return std::nullopt;
+
+		std::string updated;
+		updated.reserve(*start + replacement.size() + content_.size() - *end);
+		updated.append(content_, 0, *start);
+		updated += replacement;
+		updated.append(content_, *end, std::string::npos);
+		return FromUtf8(std::move(updated));
+	}
+
+	std::optional<SourceRange> incompleteTokenRangeAt(Position position) const {
+		const auto offset = byteOffsetFromUtf8Position(position);
+		if (!offset) return std::nullopt;
+
+		size_t start = *offset;
+		while (start > 0 && isTokenByte(static_cast<unsigned char>(content_[start - 1]))) --start;
+		size_t end = *offset;
+		while (end < content_.size() && isTokenByte(static_cast<unsigned char>(content_[end]))) ++end;
+		if (start == end) return std::nullopt;
+
+		const auto startPosition = utf8PositionAtByteOffset(start);
+		const auto endPosition = utf8PositionAtByteOffset(end);
+		return SourceRange{*startPosition, *endPosition};
+	}
+
+private:
+	std::string content_;
+	std::vector<size_t> lineStarts_;
+
+	explicit SourceText(std::string content) : content_(std::move(content)), lineStarts_{0} {
+		for (size_t offset = 0; offset < content_.size(); ++offset) {
+			if (content_[offset] == '\n') lineStarts_.push_back(offset + 1);
+		}
+	}
+
+	static bool isTokenByte(unsigned char byte) {
+		return byte == '_' || (byte >= '0' && byte <= '9') ||
+			(byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
+	}
+
+	static size_t utf8CodePointWidth(unsigned char leadByte) {
+		if (leadByte < 0x80) return 1;
+		if (leadByte < 0xE0) return 2;
+		if (leadByte < 0xF0) return 3;
+		return 4;
+	}
+
+	static bool isValidUtf8(std::string_view text) {
+		for (size_t offset = 0; offset < text.size();) {
+			const unsigned char leadByte = static_cast<unsigned char>(text[offset]);
+			if (leadByte < 0x80) {
+				++offset;
+				continue;
+			}
+
+			const size_t width = utf8CodePointWidth(leadByte);
+			if ((leadByte < 0xC2) || (leadByte > 0xF4) || offset + width > text.size()) {
+				return false;
+			}
+			for (size_t index = 1; index < width; ++index) {
+				if ((static_cast<unsigned char>(text[offset + index]) & 0xC0) != 0x80) return false;
+			}
+			const unsigned char secondByte = static_cast<unsigned char>(text[offset + 1]);
+			if ((leadByte == 0xE0 && secondByte < 0xA0) ||
+				(leadByte == 0xED && secondByte >= 0xA0) ||
+				(leadByte == 0xF0 && secondByte < 0x90) ||
+				(leadByte == 0xF4 && secondByte > 0x8F)) {
+				return false;
+			}
+			offset += width;
+		}
+		return true;
+	}
 };
 
 /// A span of source text: the file it came from plus start/end positions.
@@ -53,6 +233,7 @@ enum class IdentifierKind {
 	Unresolved,
 	Parameter,
 	EnumValue,
+	DeclaredValue,
 	FunctionRef,
 };
 
@@ -145,9 +326,11 @@ struct BinaryExpr {
 	BinaryOp op;
 	ExprPtr left;
 	ExprPtr right;
+	Span operatorSpan;
 
-	BinaryExpr(BinaryOp op, ExprPtr left, ExprPtr right)
-		: op(op), left(std::move(left)), right(std::move(right)) {}
+	BinaryExpr(BinaryOp op, ExprPtr left, ExprPtr right, Span operatorSpan = {})
+		: op(op), left(std::move(left)), right(std::move(right)),
+		  operatorSpan(std::move(operatorSpan)) {}
 };
 
 /// Ternary expression: `<condition> ? <thenBranch> : <elseBranch>`.
@@ -277,11 +460,13 @@ struct Param {
 	Name name;
 	std::optional<TypeRef> type;
 	ExprPtr defaultValue; // nullptr if no default
+	Span span;
 
-	Param(Name name, std::optional<TypeRef> type, ExprPtr defaultValue)
+	Param(Name name, std::optional<TypeRef> type, ExprPtr defaultValue, Span span = {})
 		: name(std::move(name)),
 		  type(std::move(type)),
-		  defaultValue(std::move(defaultValue)) {}
+		  defaultValue(std::move(defaultValue)),
+		  span(std::move(span)) {}
 };
 
 /// A single entry in a region section: `NAME: condition`.
@@ -300,9 +485,10 @@ struct Entry {
 struct Section {
 	SectionKind kind;
 	std::vector<Entry> entries;
+	Span span;
 
-	Section(SectionKind kind, std::vector<Entry> entries)
-		: kind(kind), entries(std::move(entries)) {}
+	Section(SectionKind kind, std::vector<Entry> entries, Span span = {})
+		: kind(kind), entries(std::move(entries)), span(std::move(span)) {}
 };
 
 /// One arbitrary data entry in a region body: `key: value`.
@@ -338,7 +524,7 @@ struct RegionBody {
 
 // == Top-level declarations ===================================================
 
-/// `region RR_KEY { name: "Display Name" scene: SCENE_ID ... }`
+/// `region KEY { <data and sections> }`
 struct RegionDecl {
 	Name key;
 	RegionBody body;
@@ -351,7 +537,7 @@ struct RegionDecl {
 };
 
 /// `extend region RR_NAME { ... }`
-/// Extensions can only add sections, not redefine scene, time_passes, or areas.
+/// Extensions add sections and cannot add or replace base-region data.
 struct ExtendRegionDecl {
 	Name name;
 	std::vector<Section> sections;
@@ -469,6 +655,12 @@ using Decl = std::variant<
 
 enum class DiagnosticLevel { Error, Warning, Info };
 
+struct DiagnosticActionData {
+	uint32_t version = 1;
+	std::string actionKind;
+	std::vector<std::string> arguments;
+};
+
 inline std::string levelToString(rls::ast::DiagnosticLevel level) {
 	switch (level) {
 	case rls::ast::DiagnosticLevel::Error:   return "error";
@@ -480,9 +672,21 @@ inline std::string levelToString(rls::ast::DiagnosticLevel level) {
 
 /// A diagnostic message produced during parsing or semantic analysis.
 struct Diagnostic {
-	DiagnosticLevel level;
-	std::string message;
+	std::string code;
 	Span span; // location of the offending construct
+	DiagnosticLevel level = DiagnosticLevel::Error;
+	std::string message;
+	std::optional<DiagnosticActionData> data;
+
+	Diagnostic() = default;
+
+	Diagnostic(std::string code, Span span, DiagnosticLevel level, std::string message,
+	           std::optional<DiagnosticActionData> data = std::nullopt)
+		: code(std::move(code)),
+		  span(std::move(span)),
+		  level(level),
+		  message(std::move(message)),
+		  data(std::move(data)) {}
 };
 
 // == File =====================================================================
@@ -505,6 +709,9 @@ enum class Type {
 	Callable,   // generic callable value
 	Condition,  // callable with signature () -> Bool
 	Enum,       // user-defined or host-defined enum value, identified by Project metadata
+	Region,     // declared region value
+	Event,      // declared event entry value
+	Location,   // declared location entry value
     Void,       // statements / declarations with no value
     Error,      // poison type — inference failed, suppress cascading errors
 };
@@ -560,6 +767,8 @@ struct Project {
 
 	std::map<std::string, const RegionDecl*> RegionDecls;
 	std::map<std::string, std::vector<const ExtendRegionDecl*>> ExtendRegionDecls;
+	std::map<std::string, std::vector<const Entry*>> EventDecls;
+	std::map<std::string, std::vector<const Entry*>> LocationDecls;
 	std::map<std::string, const DefineDecl*> DefineDecls;
 	std::map<std::string, const ExternDefineDecl*> ExternDefineDecls;
 	std::map<std::string, EnumInfo> EnumInfos;
