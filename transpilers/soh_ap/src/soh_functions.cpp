@@ -25,6 +25,11 @@ std::string SohApTranspiler::pythonTypeName(
 		// rule bundle and returns a Rule (see GenerateCallArgument / InvokeExpr).
 		case AT::Condition:
 		case AT::Callable: return "Callable[[tuple[Regions, \"SohWorld\"]], Rule]";
+		// A region/event/location parameter is annotated with the world class its values live
+		// in -- the same class renderEnumValue prefixes them with.
+		case AT::Region:   return enumClassName("Region").value_or("unsupported_type");
+		case AT::Event:    return enumClassName("Event").value_or("unsupported_type");
+		case AT::Location: return enumClassName("Location").value_or("unsupported_type");
 		default: break;
 	}
 	// An enum-valued parameter is annotated with the same class renderEnumValue prefixes

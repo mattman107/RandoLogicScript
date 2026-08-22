@@ -52,16 +52,13 @@ constexpr EnumClassMapping kEnumClasses[] = {
 	{"Enemy",    "Enemies"},
 	{"Distance", "EnemyDistance"},
 	{"Trick",    "Tricks"},
-	// Logic flags are materialized as the Events class, built from the regions' event
-	// sections. (WaterLevel has no row: it is a normal RLS enum, so writeEnums generates a
-	// WaterLevel class and enumClassName falls back to that name.)
-	{"Logic",      "Events"},
 	{"Setting",    "RandomizerSettingKey"},
+	// Region/Event/Location cover both the extern enums the stdlib declares and the same-named
+	// types sema gives values declared in RLS itself (IdentifierKind::DeclaredValue). Events are
+	// materialized as the Events class, built from the regions' event sections. (WaterLevel has
+	// no row: it is a normal RLS enum, so writeEnums generates a WaterLevel class and
+	// enumClassName falls back to that name.)
 	{"Region",     "Regions"},
-	{"Check",      "Locations"},
-	// Events and locations declared in RLS itself resolve to the pseudo-enums "Event" and
-	// "Location" (see IdentifierKind::DeclaredValue), which land in the same world classes
-	// as the extern Logic/Check enums.
 	{"Event",      "Events"},
 	{"Location",   "Locations"},
 	{"Trial",      "TrialKey"},

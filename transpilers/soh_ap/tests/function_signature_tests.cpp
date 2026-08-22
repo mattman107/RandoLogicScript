@@ -43,11 +43,11 @@ TEST(SohApFunctionSignatures, ParameterlessDefineTakesOnlyBundle) {
 }
 
 // Each enum-typed parameter is annotated with the same class renderEnumValue prefixes its
-// values with: Item -> Items, Check -> Locations, Trick -> Tricks, Enemy -> Enemies.
+// values with: Item -> Items, Location -> Locations, Trick -> Tricks, Enemy -> Enemies.
 TEST(SohApFunctionSignatures, EnumParamTypesMatchRenderEnumValueClasses) {
 	std::string out = generateFunctions(
-		"extern define affordable(check: Check) -> Bool\n"
-		"define probe(item: Item, check: Check, t: Trick, e: Enemy):\n"
+		"extern define affordable(check: Location) -> Bool\n"
+		"define probe(item: Item, check: Location, t: Trick, e: Enemy):\n"
 		"    has(item)\n");
 	EXPECT_NE(out.find("def probe(bundle, item: Items, check: Locations, t: Tricks, e: Enemies) -> bool:"),
 		std::string::npos) << out;

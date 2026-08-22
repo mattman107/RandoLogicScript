@@ -19,7 +19,7 @@ TEST(SohApHostRewrites, TrickCallRewritesToCanDoTrick) {
 // `check_price(check) <= wallet_capacity()` collapses to just the affordability check.
 TEST(SohApHostRewrites, WalletCapacityComparisonCollapsesToAffordCheck) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
-		"extern define check_price(check: Check) -> Int\n"
+		"extern define check_price(check: Location) -> Int\n"
 		"extern define wallet_capacity() -> Int\n"
 		"define test():\n"
 		"    check_price(RC_FOO) <= wallet_capacity()\n",
@@ -261,7 +261,7 @@ TEST(SohApHostRewrites, TakeDamageRendersBundleFirst) {
 // extra parentheses (GetPythonPrecedence treats the rewrite as a tightly-bound call).
 TEST(SohApHostRewrites, CollapsedSpecialCaseNeedsNoParensUnderAnd) {
 	EXPECT_EQ(GenerateExpression(sourceToExpression(
-		"extern define check_price(check: Check) -> Int\n"
+		"extern define check_price(check: Location) -> Int\n"
 		"extern define wallet_capacity() -> Int\n"
 		"define test():\n"
 		"    has(RG_HOOKSHOT) and check_price(RC_FOO) <= wallet_capacity()\n",
@@ -316,7 +316,7 @@ TEST(SohApHostRewrites, RuleMatchThreadsBundleAndEnumPrefixes) {
 // generation to emit can_afford_slot(Locations.<current location>).
 TEST(SohApHostRewrites, CheckPriceUnknownUsesCurrentLocation) {
 	auto resolved = sourceToExpression(
-		"extern define check_price(check: Check) -> Int\n"
+		"extern define check_price(check: Location) -> Int\n"
 		"extern define wallet_capacity() -> Int\n"
 		"define test():\n"
 		"    check_price(RC_UNKNOWN_CHECK) <= wallet_capacity()\n",
