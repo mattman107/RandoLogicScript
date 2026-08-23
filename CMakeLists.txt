@@ -8,10 +8,6 @@ project(RandoLogicScript)
 set(CMAKE_CXX_STANDARD 20)
 
 add_library(rls_build_options INTERFACE)
-if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-	target_compile_options(rls_build_options INTERFACE -fexperimental-library)
-	target_link_options(rls_build_options INTERFACE -fexperimental-library)
-endif()
 
 option(RLS_STATIC_MSVC_RUNTIME "Link the MSVC runtime statically" OFF)
 if(MSVC AND RLS_STATIC_MSVC_RUNTIME)
@@ -20,6 +16,13 @@ endif()
 
 include(CTest)
 include(FetchContent)
+
+FetchContent_Declare(
+	fmt
+	GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+	GIT_TAG 12.2.0
+)
+FetchContent_MakeAvailable(fmt)
 
 if(BUILD_TESTING)
 	set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)

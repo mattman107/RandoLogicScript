@@ -4,7 +4,7 @@
 #include "validate_declarations.h"
 
 #include <algorithm>
-#include <format>
+#include <fmt/format.h>
 #include <functional>
 #include <type_traits>
 #include <unordered_map>
@@ -400,7 +400,7 @@ SemanticIndex buildSemanticIndex(const ast::Project& project,
 		index.diagnostics_.push_back({
 			std::string(code),
 			ast::DiagnosticLevel::Error,
-			std::format("duplicate {} '{}'", kind, name),
+			fmt::format("duplicate {} '{}'", kind, name),
 			duplicate,
 			{{"first declaration", first}},
 		});

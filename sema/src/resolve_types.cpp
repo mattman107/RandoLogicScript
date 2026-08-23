@@ -2,7 +2,7 @@
 #include "diagnostics.h"
 #include "type_helpers.h"
 
-#include <format>
+#include <fmt/format.h>
 #include <functional>
 #include <string>
 #include <type_traits>
@@ -542,16 +542,16 @@ struct ExprResolver {
 
 		if (!result.hasNamedArgs && !argCountOk) {
 			auto count = required == nParams
-				? std::format("{}", required)
-				: std::format("{}-{}", required, nParams);
+				? fmt::format("{}", required)
+				: fmt::format("{}-{}", required, nParams);
 			diags.push_back(diagnostics::ArgumentCountMismatch(expr.span, function, count, nArgs));
 			result.hasError = true;
 		}
 
 		if (result.hasNamedArgs && hadTooManyArgs) {
 			auto count = required == nParams
-				? std::format("{}", required)
-				: std::format("{}-{}", required, nParams);
+				? fmt::format("{}", required)
+				: fmt::format("{}-{}", required, nParams);
 			diags.push_back(diagnostics::ArgumentCountMismatch(expr.span, function, count, nArgs));
 			result.hasError = true;
 		}
@@ -669,7 +669,7 @@ struct ExprResolver {
 
 			if (isCallArgCompatible(*paramType, argTypes[argIndex])) continue;
 			auto expectedName = expectedEnum.has_value()
-				? std::format("enum '{}'", *expectedEnum)
+				? fmt::format("enum '{}'", *expectedEnum)
 				: std::string(typeName(*paramType));
 
 			diags.push_back(diagnostics::ArgumentTypeMismatch(
@@ -900,7 +900,7 @@ struct ExprResolver {
 				return id->name.text;
 			}
 			if (auto* member = std::get_if<ast::MemberExpr>(&matchExpr.node)) {
-				return std::format("{}.{}", member->object.text, member->member.text);
+				return fmt::format("{}.{}", member->object.text, member->member.text);
 			}
 			return "<expr>";
 		};

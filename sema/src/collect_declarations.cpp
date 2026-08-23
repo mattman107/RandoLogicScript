@@ -1,7 +1,7 @@
 #include "collect_declarations.h"
 
 #include <algorithm>
-#include <format>
+#include <fmt/format.h>
 
 namespace rls::sema {
 
@@ -12,7 +12,7 @@ std::vector<ast::Diagnostic> collectDeclarations(ast::Project& project) {
 	                        const ast::Span& first, const ast::Span& duplicate) {
 		diagnostics.push_back(ast::Diagnostic{
 			"", duplicate, ast::DiagnosticLevel::Error,
-			std::format("duplicate {} '{}' (first declared at {}:{})",
+			fmt::format("duplicate {} '{}' (first declared at {}:{})",
 				kind, name, first.file, first.start.line)});
 	};
 

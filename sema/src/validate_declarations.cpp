@@ -3,6 +3,7 @@
 #include "type_helpers.h"
 
 #include <algorithm>
+#include <fmt/format.h>
 #include <queue>
 #include <set>
 #include <unordered_map>
@@ -404,7 +405,7 @@ static void checkFunctionSignatures(
 				auto typeDisplayName = [&](ast::Type type, const auto* node) {
 					if (type == ast::Type::Enum) {
 						if (auto enumName = project.getEnumType(node); enumName.has_value()) {
-							return std::format("enum '{}'", *enumName);
+							return fmt::format("enum '{}'", *enumName);
 						}
 					}
 					return std::string(typeName(type));
