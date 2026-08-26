@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "ast.h"
 #include "parser.h"
 #include "sema.h"

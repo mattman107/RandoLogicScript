@@ -58,13 +58,13 @@ TEST(ConsoleProject, LoadsManifestAndUsesConfiguredOutput) {
     writeFile(directory.path() / "rls.json", R"({
         "version": 1,
         "sources": ["src"],
-        "transpilers": { "ap": { "output": "generated/ap" } }
+        "transpilers": { "soh_ap": { "output": "generated/soh_ap" } }
     })");
     writeFile(directory.path() / "src" / "logic.rls", "define smoke(): true\n");
 
     EXPECT_EQ(runConsole("--project \"" + directory.path().string() + "\"",
         directory.path() / "console.log"), 0);
-    EXPECT_TRUE(fs::exists(directory.path() / "generated" / "ap" / "ap.py"));
+    EXPECT_TRUE(fs::exists(directory.path() / "generated" / "soh_ap" / "functions.gen.py"));
 }
 
 TEST(ConsoleProject, SelectsOnlyOneConfiguredManifestTranspiler) {
@@ -73,15 +73,15 @@ TEST(ConsoleProject, SelectsOnlyOneConfiguredManifestTranspiler) {
         "version": 1,
         "sources": ["src"],
         "transpilers": {
-            "ap": { "output": "generated/ap" },
+            "soh_ap": { "output": "generated/soh_ap" },
             "soh": { "output": "generated/soh" }
         }
     })");
     writeFile(directory.path() / "src" / "logic.rls", "define smoke(): true\n");
 
-    EXPECT_EQ(runConsole("--project \"" + directory.path().string() + "\" -t ap",
+    EXPECT_EQ(runConsole("--project \"" + directory.path().string() + "\" -t soh_ap",
         directory.path() / "selection.log"), 0);
-    EXPECT_TRUE(fs::exists(directory.path() / "generated" / "ap" / "ap.py"));
+    EXPECT_TRUE(fs::exists(directory.path() / "generated" / "soh_ap" / "functions.gen.py"));
     EXPECT_FALSE(fs::exists(directory.path() / "generated" / "soh"));
 }
 
@@ -90,7 +90,7 @@ TEST(ConsoleProject, RejectsUnconfiguredManifestTranspilerSelection) {
     writeFile(directory.path() / "rls.json", R"({
         "version": 1,
         "sources": ["src"],
-        "transpilers": { "ap": { "output": "generated/ap" } }
+        "transpilers": { "soh_ap": { "output": "generated/soh_ap" } }
     })");
     writeFile(directory.path() / "src" / "logic.rls", "define smoke(): true\n");
 
@@ -103,21 +103,21 @@ TEST(ConsoleProject, DiscoversManifestFromCurrentDirectory) {
     writeFile(directory.path() / "rls.json", R"({
         "version": 1,
         "sources": ["src"],
-        "transpilers": { "ap": { "output": "generated/ap" } }
+        "transpilers": { "soh_ap": { "output": "generated/soh_ap" } }
     })");
     writeFile(directory.path() / "src" / "logic.rls", "define smoke(): true\n");
 
     EXPECT_EQ(runConsoleFrom(directory.path() / "src", "", directory.path() / "discovery.log"), 0);
-    EXPECT_TRUE(fs::exists(directory.path() / "generated" / "ap" / "ap.py"));
+    EXPECT_TRUE(fs::exists(directory.path() / "generated" / "soh_ap" / "functions.gen.py"));
 }
 
 TEST(ConsoleProject, SupportsExplicitInputsAndRejectsUnknownTranspilers) {
     TemporaryDirectory directory;
     writeFile(directory.path() / "logic.rls", "define smoke(): true\n");
 
-    EXPECT_EQ(runConsole("-t ap -o \"" + (directory.path() / "ap").string() + "\" \"" +
+    EXPECT_EQ(runConsole("-t soh_ap -o \"" + (directory.path() / "soh_ap").string() + "\" \"" +
         (directory.path() / "logic.rls").string() + "\"", directory.path() / "explicit.log"), 0);
-    EXPECT_TRUE(fs::exists(directory.path() / "ap" / "ap.py"));
+    EXPECT_TRUE(fs::exists(directory.path() / "soh_ap" / "functions.gen.py"));
 
     EXPECT_NE(runConsole("-t unknown -o \"" + (directory.path() / "unknown").string() + "\" \"" +
         (directory.path() / "logic.rls").string() + "\"", directory.path() / "unknown.log"), 0);

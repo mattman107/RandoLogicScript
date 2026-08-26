@@ -11,7 +11,7 @@
 #include "parser.h"
 #include "project.h"
 #include "sema.h"
-#include "ap.h"
+#include "soh_ap.h"
 #include "soh.h"
 
 namespace fs = std::filesystem;
@@ -27,7 +27,7 @@ static void printUsage(const char* program) {
         << "  -p, --project <path>   Load an rls.json manifest.\n"
         << "  -t, --transpiler <name> [-o, --output <dir>]\n"
         << "                            Select a configured manifest transpiler, or override its output.\n"
-        << "                            Available transpilers: soh, ap\n"
+        << "                            Available transpilers: soh, soh_ap\n"
         << "  -h, --help                Show this help message.\n";
 }
 
@@ -67,7 +67,7 @@ struct TranspilerConfig {
 };
 
 static bool runTranspiler(const TranspilerConfig& config, const rls::ast::Project& project) {
-    if (config.name != "soh" && config.name != "ap") {
+    if (config.name != "soh" && config.name != "soh_ap") {
         std::cerr << "error: unknown transpiler '" << config.name << "'\n";
         return false;
     }
@@ -86,8 +86,26 @@ static bool runTranspiler(const TranspilerConfig& config, const rls::ast::Projec
             std::cerr << "aborting due to SoH transpiler errors\n";
             return false;
         }
+    } else if (config.name == "soh_ap") {
+        rls::transpilers::soh_ap::SohApTranspiler transpiler(project);
+        transpiler.Transpile(writer);
+
+        // Surface constructs the RuleBuilder target cannot represent (negating a rule,
+        // a rule-conditioned ternary with no known complement, a runtime value combined
+        // with a rule). Abort rather than ship Python that raises at world-load.
+        bool hasErrors = false;
+        for (const auto& d : transpiler.Diagnostics()) {
+            printDiagnostic(d);
+            if (d.level == rls::ast::DiagnosticLevel::Error)
+                hasErrors = true;
+        }
+        if (hasErrors) {
+            std::cerr << "aborting: '" << config.name << "' could not represent some rules\n";
+            return false;
+        }
     } else {
-        rls::transpilers::ap::Transpile(project, writer);
+        std::cerr << "error: unknown transpiler '" << config.name << "'\n";
+        return false;
     }
 
     return true;

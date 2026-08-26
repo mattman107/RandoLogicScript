@@ -7,14 +7,14 @@ TEST(AcceptanceAp, ExamplesRlsMatchesGolden) {
 	const auto project = parseAndAnalyzeProject(repoPath("examples/soh/src"), errors);
 	ASSERT_TRUE(errors.empty()) << joinLines(errors);
 
-	TempDirectory outputDir("ap");
+	TempDirectory outputDir("soh_ap");
 	{
 		DirectoryWriter writer(outputDir.path());
-		rls::transpilers::ap::Transpile(project, writer);
+		rls::transpilers::soh_ap::SohApTranspiler(project).Transpile(writer);
 	}
 
 	expectDirectoryMatchesGolden(
 		outputDir.path(),
-		repoPath("examples/soh/out_ap"),
-		R"(.\build\console\RandoLogicScript.exe -p .\examples\soh\rls.json -t ap)");
+		repoPath("examples/soh/out_soh_ap"),
+		R"(.\build\console\RandoLogicScript.exe -p .\examples\soh\rls.json -t soh_ap)");
 }

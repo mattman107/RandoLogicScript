@@ -5,8 +5,8 @@
         "soh": {
             "output": "out_soh/"
         },
-        "ap": {
-            "output": "out_ap/"
+        "soh_ap": {
+            "output": "out_soh_ap/"
         }
     }
 }

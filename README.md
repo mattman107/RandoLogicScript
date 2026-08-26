@@ -26,7 +26,7 @@ RandoLogicScript -t soh -o out/soh/ src/
 Multiple transpilers can be specified, each with their own output directory:
 
 ```
-RandoLogicScript -t soh -o out/soh/ -t ap -o out/ap/ src/ extra.rls
+RandoLogicScript -t soh -o out/soh/ -t soh_ap -o out/ap/ src/ extra.rls
 ```
 
 Input paths can be individual `.rls` files or directories (which are recursively scanned for `.rls` files).
@@ -66,7 +66,7 @@ Manifest transpiler outputs are used by default. Each command-line `-t <name> -o
 | Name         | Target                 |
 | ------------ | ---------------------- |
 | `soh`        | C++ for Shipwright     |
-| `ap`         | Python for Archipelago |
+| `soh_ap`     | Python for Archipelago |
 
 ## Docs
 
