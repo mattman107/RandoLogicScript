@@ -58,6 +58,8 @@ compile_commands.json
 *.log 
 *.bak 
 *.swp 
+__pycache__/
+*.py[cod]
 
 # vcpkg
 vcpkg_installed/
@@ -68,7 +70,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
-/.vs
+.vs/
 
 # VS Code extension build and test output
 editors/vscode/node_modules/
@@ -77,3 +79,7 @@ editors/vscode/dist/
 editors/vscode/.vscode-test/
 editors/vscode/server/
 editors/vscode/*.vsix
+
+# Visual Studio extension build output
+editors/visualstudio/**/bin/
+editors/visualstudio/**/obj/

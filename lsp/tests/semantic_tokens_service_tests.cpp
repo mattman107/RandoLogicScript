@@ -139,9 +139,11 @@ TEST(SemanticTokensServiceTests, EncodesResolvedCategoriesAndModifiers) {
     EXPECT_EQ(memberUse->type, 3u);
     EXPECT_EQ(memberUse->modifiers, 12u);
     EXPECT_EQ(region, nullptr);
-    EXPECT_EQ(property, nullptr);
+    ASSERT_NE(property, nullptr);
+    EXPECT_EQ(property->type, 7u);
+    EXPECT_EQ(property->modifiers, 1u);
     ASSERT_NE(entry, nullptr);
-    EXPECT_EQ(entry->type, 4u);
+    EXPECT_EQ(entry->type, 7u);
     EXPECT_EQ(entry->modifiers, 1u);
     ASSERT_NE(exit, nullptr);
     EXPECT_EQ(exit->type, 4u);
@@ -216,13 +218,34 @@ TEST(SemanticTokensServiceTests, HighlightsConcreteValuesResolvedThroughUniquePa
     const auto* bare = tokenAt(tokens, 1, 14);
     const auto* qualified = tokenAt(tokens, 1, 34);
 
-    EXPECT_EQ(pattern, nullptr);
+    ASSERT_NE(pattern, nullptr);
+    EXPECT_EQ(pattern->type, 3u);
+    EXPECT_EQ(pattern->modifiers, 13u);
+    EXPECT_EQ(pattern->length, 4u);
     ASSERT_NE(bare, nullptr);
     EXPECT_EQ(bare->type, 3u);
     EXPECT_EQ(bare->modifiers, 12u);
     ASSERT_NE(qualified, nullptr);
     EXPECT_EQ(qualified->type, 3u);
     EXPECT_EQ(qualified->modifiers, 12u);
+}
+
+TEST(SemanticTokensServiceTests, HighlightsEachExternEnumWildcardPattern) {
+    SemanticTokensFixture fixture(
+        "extern enum Setting { RSK_*, RO_* }\n");
+
+    const auto tokens = fixture.tokens();
+    const auto* first = tokenAt(tokens, 0, 22);
+    const auto* second = tokenAt(tokens, 0, 29);
+
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->type, 3u);
+    EXPECT_EQ(first->modifiers, 13u);
+    EXPECT_EQ(first->length, 5u);
+    ASSERT_NE(second, nullptr);
+    EXPECT_EQ(second->type, 3u);
+    EXPECT_EQ(second->modifiers, 13u);
+    EXPECT_EQ(second->length, 4u);
 }
 
 TEST(SemanticTokensServiceTests, HighlightsWildcardValuesInExternParameterDefaults) {
