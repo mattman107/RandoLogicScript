@@ -79,6 +79,22 @@ TEST(SohSolverTests, GenerateRegionSimple) {
 	);
 }
 
+TEST(SohSolverTests, GenerateRegionDecaysIntConditionsToBool) {
+    const auto project = resolveFromSource(
+        "region RR_TEST {\n"
+        "    name: \"Test\"\n"
+        "    scene: SCENE_TEST\n"
+        "    locations { RC_TEST: hearts() }\n"
+        "}\n"
+    );
+
+    MemoryWriter out;
+    rls::transpilers::soh::SohTranspiler(project).GenerateRegionsSource(out);
+
+    EXPECT_NE(out.content("regions.gen.cpp").find(
+        "LOCATION(RC_TEST, hearts() != 0)"), std::string::npos);
+}
+
 TEST(SohSolverTests, GenerateRegionUsesExplicitConstructorForRegionMetadata) {
     const auto project = resolveFromSource (
 		"enum TimePasses { Auto, Yes, No }\n"

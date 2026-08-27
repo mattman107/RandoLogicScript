@@ -27,7 +27,7 @@ bool can_break_lower_beehives() {
 }
 
 bool can_break_upper_beehives() {
-    return hookshot_or_boomerang() || trick(RandomizerTrick::RT_BOMBCHU_BEEHIVES) && can_use(RandomizerGet::RG_BOMBCHU_5) || setting(RSK_SLINGBOW_BREAK_BEEHIVES) && (can_use(RandomizerGet::RG_FAIRY_BOW) || can_use(RandomizerGet::RG_FAIRY_SLINGSHOT));
+    return hookshot_or_boomerang() || trick(RandomizerTrick::RT_BOMBCHU_BEEHIVES) && can_use(RandomizerGet::RG_BOMBCHU_5) || setting(RSK_SLINGBOW_BREAK_BEEHIVES) != 0 && (can_use(RandomizerGet::RG_FAIRY_BOW) || can_use(RandomizerGet::RG_FAIRY_SLINGSHOT));
 }
 
 bool can_climb_ladder() {
@@ -51,7 +51,7 @@ bool can_get_drop(const RandomizerEnemy e, const EnemyDistance distance, const b
 }
 
 bool can_get_night_time_gs() {
-    return at_night() && (can_use(RandomizerGet::RG_SUNS_SONG) || !setting(RSK_SKULLS_SUNS_SONG));
+    return at_night() && (can_use(RandomizerGet::RG_SUNS_SONG) || !(setting(RSK_SKULLS_SUNS_SONG) != 0));
 }
 
 bool can_jumpslash() {

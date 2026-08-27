@@ -177,6 +177,42 @@ TEST(SohExpressions, UnaryNot) {
 		"!value");
 }
 
+TEST(SohExpressions, IntsDecayToBoolExplicitly) {
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    not hearts()\n",
+		"test")),
+		"!(hearts() != 0)");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    hearts() and true\n",
+		"test")),
+		"hearts() != 0 && true");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    hearts() ? 1 : false\n",
+		"test")),
+		"hearts() != 0 ? 1 != 0 : false");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test():\n"
+		"    any_age(hearts())\n",
+		"test")),
+		"any_age([]{return hearts() != 0;})");
+
+	EXPECT_EQ(GenerateExpression(sourceToExpression(
+		"define test(distance: Distance):\n"
+		"    match distance {\n"
+		"        ED_CLOSE: 1\n"
+		"        _: false\n"
+		"    }\n",
+		"test")),
+		"rls::match([&]{return distance == EnemyDistance::ED_CLOSE;}, [&]{return 1 != 0;}, false, "
+		"[&]{return true;}, [&]{return false;}, false)");
+}
+
 TEST(SohExpressions, BinaryAndOr) {
 	auto expr = sourceToExpression(
 		"define test():\n"
@@ -375,7 +411,7 @@ TEST(SohExpressions, TernaryNestedRightAssociative) {
 		"    1 ? 2 ? 3 : 4 : 5\n",
 		"test");
 	EXPECT_EQ(GenerateExpression(expr),
-		"1 ? 2 ? 3 : 4 : 5");
+		"1 != 0 ? 2 != 0 ? 3 : 4 : 5");
 }
 
 TEST(SohExpressions, CallHostFunctions) {

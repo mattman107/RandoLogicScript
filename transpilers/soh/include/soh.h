@@ -18,10 +18,14 @@ public:
 	void GenerateRegionsHeader(rls::OutputWriter& out) const;
 	std::vector<rls::ast::Diagnostic> GenerateRegionsSource(rls::OutputWriter& out) const;
 	std::string GenerateExpression(const rls::ast::ExprPtr& expr) const;
+	std::string GenerateBoolExpression(const rls::ast::ExprPtr& expr) const;
 
 private:
 	int GetCppPrecedence(const rls::ast::ExprPtr& expr) const;
+	int GetCppPrecedence(const rls::ast::Expr* expr) const;
 	std::string GenerateChildExpression(const rls::ast::ExprPtr& expr, int parentPrec, bool isRightChild = false) const;
+	std::string GenerateBoolExpression(const rls::ast::Expr* expr) const;
+	std::string GenerateBoolChildExpression(const rls::ast::ExprPtr& expr, int parentPrec, bool isRightChild = false) const;
 	std::string GenerateExpression(const rls::ast::BoolLiteral& node) const;
 	std::string GenerateExpression(const rls::ast::IntLiteral& node) const;
 	std::string GenerateExpression(const rls::ast::StringLiteral& node) const;

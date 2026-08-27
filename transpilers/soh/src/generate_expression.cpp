@@ -1,6 +1,7 @@
 #include "soh.h"
 #include "enum_mappings.h"
 
+#include <algorithm>
 #include <optional>
 #include <sstream>
 
@@ -81,7 +82,11 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::Identifier& node) 
 // Returns the C++ operator precedence for an expression node.
 // Lower values bind tighter. Non-compound nodes return 0 (tightest).
 int SohTranspiler::GetCppPrecedence(const rls::ast::ExprPtr& expr) const {
-	if (auto* bin = std::get_if<rls::ast::BinaryExpr>(&expr->node)) {
+    return GetCppPrecedence(expr.get());
+}
+
+int SohTranspiler::GetCppPrecedence(const rls::ast::Expr* expr) const {
+    if (auto* bin = std::get_if<rls::ast::BinaryExpr>(&expr->node)) {
 		switch (bin->op) {
 		case rls::ast::BinaryOp::Mul:
 		case rls::ast::BinaryOp::Div:
@@ -127,8 +132,8 @@ std::string SohTranspiler::GenerateChildExpression(
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::UnaryExpr& node) const {
 	switch (node.op) {
-	case rls::ast::UnaryOp::Not:
-		return "!" + GenerateChildExpression(node.operand, 3);
+    case rls::ast::UnaryOp::Not:
+        return "!" + GenerateBoolChildExpression(node.operand, 3);
 	default:
 		return "";
 	}
@@ -152,9 +157,11 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::BinaryExpr& node) 
 
     switch (node.op) {
     case rls::ast::BinaryOp::And:
-        return GenerateChildExpression(node.left, 14) + " && " + GenerateChildExpression(node.right, 14, true);
+        return GenerateBoolChildExpression(node.left, 14) + " && "
+            + GenerateBoolChildExpression(node.right, 14, true);
     case rls::ast::BinaryOp::Or:
-        return GenerateChildExpression(node.left, 15) + " || " + GenerateChildExpression(node.right, 15, true);
+        return GenerateBoolChildExpression(node.left, 15) + " || "
+            + GenerateBoolChildExpression(node.right, 15, true);
     case rls::ast::BinaryOp::Eq:
         if (isMixedEnumInt) {
             return generateIntegerCompatibleOperand(node.left, 10) + " == "
@@ -197,9 +204,15 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::BinaryExpr& node) 
 }
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::TernaryExpr& node) const {
-	return GenerateChildExpression(node.condition, 15) + " ? " +
-		   GenerateExpression(node.thenBranch) + " : " +
-		   GenerateExpression(node.elseBranch);
+    const auto thenType = project.getType(node.thenBranch.get());
+    const auto elseType = project.getType(node.elseBranch.get());
+    const bool hasMixedBoolIntBranches = thenType.has_value() && elseType.has_value()
+        && ((thenType.value() == rls::ast::Type::Bool && elseType.value() == rls::ast::Type::Int)
+            || (thenType.value() == rls::ast::Type::Int && elseType.value() == rls::ast::Type::Bool));
+
+    return GenerateBoolChildExpression(node.condition, 15) + " ? " +
+           (hasMixedBoolIntBranches ? GenerateBoolExpression(node.thenBranch) : GenerateExpression(node.thenBranch)) + " : " +
+           (hasMixedBoolIntBranches ? GenerateBoolExpression(node.elseBranch) : GenerateExpression(node.elseBranch));
 }
 
 std::optional<rls::ast::Type> SohTranspiler::ResolveCallParamType(
@@ -268,12 +281,16 @@ std::string SohTranspiler::GenerateCallArgument(
     }
 
     if (emitConditionThunk) {
-        return "[]{return " + GenerateExpression(argExpr->node) + ";}";
+        return "[]{return " + GenerateBoolExpression(argExpr) + ";}";
     }
 
     const auto argCode = GenerateExpression(argExpr->node);
     if (!paramType.has_value() || !argType.has_value()) {
         return argCode;
+    }
+
+    if (paramType.value() == rls::ast::Type::Bool && argType.value() == rls::ast::Type::Int) {
+        return argCode + " != 0";
     }
 
     if (paramType.value() == rls::ast::Type::Int && isEnumLikeType(argType.value())) {
@@ -328,6 +345,13 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::HereRef& node) con
 std::string SohTranspiler::GenerateExpression(const rls::ast::MatchExpr& node) const {
 	std::ostringstream oss;
 	oss << "rls::match(";
+    const bool hasBoolArm = std::ranges::any_of(node.arms, [&](const auto& arm) {
+        return project.getType(arm.body.get()) == rls::ast::Type::Bool;
+    });
+    const bool hasIntArm = std::ranges::any_of(node.arms, [&](const auto& arm) {
+        return project.getType(arm.body.get()) == rls::ast::Type::Int;
+    });
+    const bool decayArmBodiesToBool = hasBoolArm && hasIntArm;
 
 	for (size_t i = 0; i < node.arms.size(); i++) {
 		const auto& arm = node.arms[i];
@@ -348,7 +372,9 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::MatchExpr& node) c
         }
 
 		// Body lambda: [&]{ return <body_expression>; }
-		oss << "[&]{return " << GenerateExpression(arm.body) << ";}, ";
+        oss << "[&]{return "
+            << (decayArmBodiesToBool ? GenerateBoolExpression(arm.body) : GenerateExpression(arm.body))
+            << ";}, ";
 
 		// Fallthrough flag
 		oss << (arm.fallthrough ? "true" : "false");
@@ -379,6 +405,33 @@ std::string SohTranspiler::GenerateExpression(const rls::ast::Expr::Variant& nod
 
 std::string SohTranspiler::GenerateExpression(const rls::ast::ExprPtr& expr) const {
 	return GenerateExpression(expr->node);
+}
+
+std::string SohTranspiler::GenerateBoolExpression(const rls::ast::ExprPtr& expr) const {
+    return GenerateBoolExpression(expr.get());
+}
+
+std::string SohTranspiler::GenerateBoolExpression(const rls::ast::Expr* expr) const {
+    auto result = GenerateExpression(expr->node);
+    if (project.getType(expr) == rls::ast::Type::Int) {
+        if (GetCppPrecedence(expr) > 10) {
+            result = "(" + result + ")";
+        }
+        return result + " != 0";
+    }
+    return result;
+}
+
+std::string SohTranspiler::GenerateBoolChildExpression(
+    const rls::ast::ExprPtr& expr, int parentPrec, bool isRightChild) const
+{
+    auto result = GenerateBoolExpression(expr);
+    const int childPrec = project.getType(expr.get()) == rls::ast::Type::Int
+        ? 10 : GetCppPrecedence(expr);
+    if (childPrec > parentPrec || (isRightChild && childPrec == parentPrec)) {
+        return "(" + result + ")";
+    }
+    return result;
 }
 
 }

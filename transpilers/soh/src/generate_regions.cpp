@@ -92,7 +92,7 @@ void WriteEvents(
 	const std::vector<rls::ast::Section>& sections)
 {
     WriteEntries(sections, rls::ast::SectionKind::Events, [&](const rls::ast::Entry& entry){
-        source << "    EVENT_ACCESS(" << entry.name.text << ", " << transpiler.GenerateExpression(entry.condition) << "),\n";
+        source << "    EVENT_ACCESS(" << entry.name.text << ", " << transpiler.GenerateBoolExpression(entry.condition) << "),\n";
     });
 }
 
@@ -102,7 +102,7 @@ void WriteLocations(
 	const std::vector<rls::ast::Section>& sections)
 {
     WriteEntries(sections, rls::ast::SectionKind::Locations, [&](const rls::ast::Entry& entry){
-        source << "    LOCATION(" << entry.name.text << ", " << transpiler.GenerateExpression(entry.condition) << "),\n";
+        source << "    LOCATION(" << entry.name.text << ", " << transpiler.GenerateBoolExpression(entry.condition) << "),\n";
     });
 }
 
@@ -112,7 +112,7 @@ void WriteExits(
 	const std::vector<rls::ast::Section>& sections)
 {
     WriteEntries(sections, rls::ast::SectionKind::Exits, [&](const rls::ast::Entry& entry){
-        source << "    ENTRANCE(" << entry.name.text << ", " << transpiler.GenerateExpression(entry.condition) << "),\n";
+        source << "    ENTRANCE(" << entry.name.text << ", " << transpiler.GenerateBoolExpression(entry.condition) << "),\n";
     });
 }
 
